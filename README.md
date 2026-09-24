@@ -16,7 +16,13 @@ The official `pencil` MCP server forwards every call to the single running deskt
 
 Before every app call, pen-multi checks that the app really has the file open (its active window, or a window whose renderer process was launched with that file), so a file is never silently sent to another document. The CLI and the app's server are used as-is: not modified, patched or bundled.
 
-**The app never takes focus.** When a tool needs a file in the app that is not open there (`import-to-canvas`, `screenshot-to-canvas`, `spawn_agents`), pen-multi opens it with `open -g`, which adds a window to Pen without bringing Pen to the front. If this agent had the file open headlessly, it is saved and handed over first.
+**pen-multi never opens, focuses or raises your windows.** Opening a document in Pen puts its window in front of every app except the one you are in, even with `open -g`, so pen-multi does not open your files in the app:
+
+- `browser` runs in a **workbench**: one scratch document (`~/.pen-multi/workbench/workbench.pen`) that pen-multi opens once per Pen session and moves off screen (macOS leaves a sliver in the bottom-left corner). That first open shows its window briefly; afterwards, browser calls leave the window order unchanged.
+- `import-to-canvas` / `screenshot-to-canvas` run in the workbench, then the new layers are rebuilt in `filePath` (headless or open in the app) with execute snippets, and removed from the workbench. Screenshot image files are copied next to the destination, renamed on a clash.
+- Pen only renders web pages and imports while its windows are shown. If you have hidden Pen (Cmd+H), it is shown for the duration of a browser call, behind the app you are in, then hidden again.
+- Opening the workbench makes it Pen's active window. Calls without `filePath` keep going to the document that was active before.
+- `spawn_agents` runs only on a document already open in the app; otherwise the error tells the agent to use its own subagents on the same file.
 
 **App documents are saved to disk** after each successful change, through the CLI's app mode (`pen interactive -a desktop`), which reaches the app's save command without focusing it. That CLI reports "Saved" even for documents the app does not have open, so pen-multi checks the file's modification time instead of trusting the output. This also saves the user's own unsaved edits in that document.
 
@@ -28,11 +34,11 @@ Before every app call, pen-multi checks that the app really has the file open (i
 | `get_style({ name, params })` | Same |
 | `get_app_state()` | Same with no `filePath` (app state, selection, browser); with `filePath`, the state of that file |
 | `execute` | Same; `filePath` optional as in the official server |
-| `browser` | Read actions (`load-page`, `return-element`, `return-screenshot`) work with any file; canvas actions open the file in the app in the background. Pass `url` with any action to load and act in one step. |
-| `spawn_agents` | Runs in the app; opens the file there in the background if needed. Without the app, the error tells the agent to use its own subagents on the same file instead. |
+| `browser` | Runs in the off-screen workbench; canvas actions move the result into any file, headless or in the app. Pass `url` with any action to load and act in one step. |
+| `spawn_agents` | Runs in the app on a document open there. Otherwise, or without the app, the error tells the agent to use its own subagents on the same file. |
 | — | Extra: `open_file`, `fork_version`, `save`, `close_file`, `list_sessions` |
 
-`browser` and `spawn_agents` need the desktop app running (the CLI cannot run the integrated browser). Each app window has its own browser; agents take turns on them through a machine-wide lock, so one agent's page load cannot land between another agent's load and read.
+`browser` and `spawn_agents` need the desktop app running (the CLI cannot run the integrated browser). Agents take turns on the workbench browser through a machine-wide lock, so one agent's page load cannot land between another agent's load and read.
 
 ## Setup
 
@@ -53,7 +59,7 @@ It can run next to the official `pencil` server.
 | `read_skill`, `get_style` | Same as the official server (cached; no design file needed) |
 | `execute` | Run a snippet against `filePath` (or the app's active document); supports `editId` + `edits` retries |
 | `get_app_state` | Document state of one file, or of the app |
-| `browser`, `spawn_agents` | App features; the file is opened in the app in the background when needed |
+| `browser`, `spawn_agents` | App features; see above |
 | `open_file` | Open a file explicitly, or create a new version from `sourcePath` |
 | `fork_version` | Copy a file to a new path to work on a separate version |
 | `save` | Write to disk (only needed with autosave off) |
@@ -96,13 +102,16 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 | `PEN_MULTI_APP` | `1` | `0` never uses the desktop app |
 | `PEN_MULTI_APP_SERVER` | the app's bundled `mcp-server` | Path to the app's MCP server binary |
 | `PEN_MULTI_APP_AGENT` | `claudeCodeCLI` | Agent name reported to the app |
-| `PEN_MULTI_APP_OPEN_CMD` | `["open","-g","-a","Pen"]` | JSON command that opens a file in the app without focusing it |
-| `PEN_MULTI_APP_OPEN_TIMEOUT_MS` | `90000` | How long to wait for the app to open a file |
+| `PEN_MULTI_WORKBENCH` | `~/.pen-multi/workbench/workbench.pen` | The off-screen scratch document for browser calls |
+| `PEN_MULTI_APP_OPEN_CMD` | `["open","-g","-a","Pen"]` | JSON command that opens the workbench in the app |
+| `PEN_MULTI_APP_OPEN_TIMEOUT_MS` | `90000` | How long to wait for the app to open the workbench |
+| `PEN_MULTI_APP_UI` | `1` | `0` skips macOS UI scripting (hiding Pen, moving the workbench); needs System Events access |
 
 ## Limitations
 
 - Headless files have no live view: open them in the app afterwards to look at them.
-- Windows pen-multi opens in the app stay open; close them in Pen when done.
+- The workbench window stays open (off screen) while Pen runs; closing it is fine, it is reopened when needed.
+- Moving the workbench and showing/hiding Pen use System Events, which macOS may ask to allow once.
 - Documents opened in the app from its dashboard (not from a file) may not be detected as open, since detection reads each window's launch file; such a file is then edited headlessly.
 - `spawn_agents` has only been tested against a fake app; its designer agents run on the app's own AI settings.
 - Responses are read from the CLI's interactive shell output, so a CLI update could change the format. The CLI version is pinned in `package.json`; run `npm test` after bumping it.
@@ -113,4 +122,5 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 ```bash
 npm test   # needs a logged-in CLI; ~1 min normally, several on a loaded machine
 node --test test/pool.test.js test/app.test.js test/shell.test.js   # fake CLI/app and unit tests, no login needed
+# test/workbench.test.js uses a fake app backed by real headless editors (needs login)
 ```

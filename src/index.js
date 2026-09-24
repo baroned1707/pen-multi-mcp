@@ -8,6 +8,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppBridge, AppUnavailableError, textOf } from "./app.js";
 import { toContent } from "./format.js";
+import { carryImages, readPrinted, snippets } from "./transfer.js";
 import { FileLock, SessionPool, config, normalize, withMachineLock } from "./pool.js";
 import { cliVersion } from "./shell.js";
 
@@ -22,8 +23,8 @@ Where a call runs:
 - A file open in the running pen.dev desktop app (any window, active or not) is edited in the app, so the user sees it live.
 - Any other file is edited in its own headless editor; no app needed.
 - No filePath means the app's active document, like the official server.
-- browser's canvas actions (import-to-canvas, screenshot-to-canvas) and spawn_agents need the file in the app: if it is not open there, it is opened in the background. The app is never brought to the front and never takes focus from what the user is doing.
-- browser's read actions (load-page, return-element, return-screenshot) work with any file. Each app window has its own browser and agents take turns on them; pass url together with any other browser action to load the page and act on it in one step.
+- pen-multi never opens, focuses or raises the user's windows. browser runs in its own workbench window kept off screen; import-to-canvas and screenshot-to-canvas then move the result into filePath, headless or in the app. Agents take turns on the browser; pass url with any browser action to load the page and act on it in one step.
+- spawn_agents runs in the app, so it needs filePath open there; otherwise use your own subagents on the same filePath.
 - ${config.autosave ? "Every successful change is saved to disk automatically, in the app too (this also saves the user's own unsaved edits in that document)." : "Changes are not saved automatically: call save for headless files; the user saves app documents."}
 - Each response starts with "File: <path>" and says where it ran. A file is never silently routed to another document.
 
@@ -32,7 +33,7 @@ Many agents and projects:
 - A file can be edited headlessly by only one agent at a time; the error names the agent's project holding it. fork_version copies a file so you can work on a separate version in parallel.
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.`;
 
-const server = new McpServer({ name: "pen-multi", version: "0.3.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "0.4.0" }, { instructions: INSTRUCTIONS });
 
 const filePath = z
   .string()
@@ -51,14 +52,14 @@ const fail = (text, file) => ({ content: [{ type: "text", text: file ? `File: ${
 
 const APP_ONLY_HELP = {
   spawn_agents:
-    "Without the app, split the work with your own subagents instead: give each one a container node and the same filePath. " +
+    "Split the work with your own subagents instead: give each one a container node and the same filePath. " +
     "Their execute calls on that file are queued one at a time, so they cannot overwrite each other.",
 };
 
 const fromApp = (res, target, note) => ({
   ...res,
   content: [
-    { type: "text", text: `File: ${target.file} (in the pen.dev desktop app${target.opened ? ", opened in the background" : ""})` },
+    { type: "text", text: target.workbench ? "(pen-multi workbench in the pen.dev desktop app)" : `File: ${target.file} (in the pen.dev desktop app)` },
     ...(res.content ?? []),
     ...(note && !res.isError ? [{ type: "text", text: note }] : []),
   ],
@@ -95,8 +96,11 @@ async function route(f, { needsApp = false, tool: toolName } = {}) {
   const appUp = await app.available();
   const unavailable = (msg) => new AppUnavailableError([msg, APP_ONLY_HELP[toolName]].filter(Boolean).join(" "));
   if (!f) {
-    const active = appUp ? await app.activeFile() : null;
+    const active = appUp ? await app.userActiveFile() : null;
     if (active) return { mode: "app", file: active };
+    if (appUp && (await app.activeFile()) === app.workbenchFile) {
+      throw new Error("The pen.dev app's active window is pen-multi's workbench, not a design. Pass filePath.");
+    }
     if (!appUp) {
       throw unavailable(
         needsApp
@@ -112,28 +116,26 @@ async function route(f, { needsApp = false, tool: toolName } = {}) {
     if (needsApp) throw unavailable("This needs the pen.dev desktop app, which is not running.");
     return { mode: "headless", file };
   }
-  const openInApp = (await app.openFiles()).has(file);
-  if (!openInApp && !needsApp) return { mode: "headless", file };
-
+  if (!(await app.openFiles()).has(file)) {
+    // Opening the user's file in the app would put a window in front of whatever they are doing.
+    if (needsApp) {
+      throw new Error(
+        [`This needs ${file} open in the pen.dev app, and pen-multi never opens windows for you.`, APP_ONLY_HELP[toolName]]
+          .filter(Boolean)
+          .join(" "),
+      );
+    }
+    return { mode: "headless", file };
+  }
   const other = heldByOtherAgent(file);
   if (other) throw new Error(`Cannot use ${file} in the pen.dev app: ${other}`);
   if (pool.sessions.has(file)) {
-    if (openInApp) {
-      throw new Error(
-        `${file} is open both headlessly here and in the pen.dev app, and the two would overwrite each other. ` +
-          `close_file it here (this saves it), then reload it in the app so the app has the saved version.`,
-      );
-    }
-    await pool.close(file); // hand the headless editor over: saved to disk, then opened by the app
+    throw new Error(
+      `${file} is open both headlessly here and in the pen.dev app, and the two would overwrite each other. ` +
+        `close_file it here (this saves it), then reload it in the app so the app has the saved version.`,
+    );
   }
-  if (!openInApp) {
-    if (!fs.existsSync(file)) {
-      await pool.use(file, (s) => pool.save(s)); // the app can only open a file that exists
-      await pool.close(file);
-    }
-    await app.openInBackground(file);
-  }
-  return { mode: "app", file, opened: !openInApp };
+  return { mode: "app", file };
 }
 
 const tool = (name, description, schema, handler) =>
@@ -257,26 +259,27 @@ tool(
 );
 
 const BROWSER_READS = new Set(["load-page", "return-element", "return-screenshot"]);
+const BROWSER_LOCK = "pen.dev app browser";
 
 tool(
   "browser",
-  `Interact with a real website loaded in the pen.dev app's integrated browser: open a URL, reproduce a page (or one element) as editable canvas layers, screenshot it, or pull its DOM/screenshot back into the conversation. Needs the pen.dev desktop app running (it is never brought to the front).
+  `Interact with a real website in the pen.dev app's integrated browser: open a URL, reproduce a page (or one element) as editable canvas layers, screenshot it, or pull its DOM/screenshot back into the conversation. Needs the pen.dev desktop app running. It runs in a pen-multi workbench window kept off screen, so the user's windows are never opened, focused or brought to the front.
 
 - "load-page": load "url" in the browser.
 - "return-element": return the target element's DOM and computed styles as text.
 - "return-screenshot": return a screenshot of the target as an image for you to inspect.
-- "import-to-canvas": reproduce the target as editable layers in filePath's document; reports the imported frame's id for execute.
+- "import-to-canvas": reproduce the target as editable layers in filePath's document (headless or open in the app); reports the new frame's id for execute.
 - "screenshot-to-canvas": place a screenshot of the target in filePath's document as an image.
 
-The read actions work with any file, headless or not. The canvas actions open filePath in the app in the background if needed. Each app window has its own browser, shared by all agents: pass url with any other action to load the page in the right window and act on it in one step, so no other agent can change the page in between.
-
-target: "full-page" (default), "selection" (element picked with the browser's element picker), or "query" (with querySelector). Prefer "query" or "selection"; "return-element" on broad selectors can be huge. nodeId drives a browser node on filePath's canvas instead of the sidebar. Imported pages are normal canvas nodes: edit them with execute.`,
+The browser is shared by all agents: pass url with any other action to load the page and act on it in one step, so no other agent can change the page in between. target: "full-page" (default), "selection" (element picked with the browser's element picker), or "query" (with querySelector). Prefer "query"; "return-element" on broad selectors can be huge. nodeId drives a browser node on filePath's canvas instead (that document must be open in the app). Imported layers are normal canvas nodes: edit them with execute.`,
   {
     action: z
       .enum(["load-page", "import-to-canvas", "screenshot-to-canvas", "return-element", "return-screenshot"])
       .describe("What to do: load-page, import-to-canvas, screenshot-to-canvas, return-element, or return-screenshot."),
-    filePath: optionalFilePath,
-    nodeId: z.string().optional().describe("Id of a browser node in the document to drive. Omit to drive the browser sidebar's own page."),
+    filePath: optionalFilePath.describe(
+      "Destination .pen file for import-to-canvas and screenshot-to-canvas (headless or open in the app). Omit for the app's active document.",
+    ),
+    nodeId: z.string().optional().describe("Id of a browser node in filePath's document to drive, instead of the browser sidebar."),
     target: z.enum(["full-page", "selection", "query"]).optional().describe("What to act on (default full-page)."),
     querySelector: z.string().optional().describe('A CSS selector executed in the page. Required when target is "query".'),
     url: z
@@ -285,20 +288,75 @@ target: "full-page" (default), "selection" (element picked with the browser's el
       .describe('An http(s) or file URL. Required for "load-page"; with any other action, the page is loaded first in the same step.'),
   },
   async ({ filePath: f, url, ...rest }) => {
-    const reading = BROWSER_READS.has(rest.action) && !rest.nodeId;
-    const target = reading ? await browserTarget(f) : await route(f, { needsApp: true, tool: "browser" });
-    return withMachineLock("pen.dev app browser", async () => {
-      if (url && rest.action !== "load-page") {
-        const loaded = await browserCall(target, { action: "load-page", url, ...pick(rest, "nodeId") });
-        if (loaded.isError) return fromApp(withHint(loaded, url), target);
-      }
-      const args = { ...rest, ...(rest.action === "load-page" ? { url } : {}) };
-      if (reading) return fromApp(withHint(await browserCall(target, args), url), target);
-      const res = await appWrite(target, "browser", args, browserCall);
-      return withHint(res, url);
+    const reading = BROWSER_READS.has(rest.action);
+    if (rest.nodeId) return browserNode(f, url, rest, reading);
+    if (!(await app.available())) throw new AppUnavailableError("browser needs the pen.dev desktop app, which is not running.");
+    const dest = reading ? null : await route(f); // resolve the destination before touching the browser
+
+    return withMachineLock(BROWSER_LOCK, async () => {
+      const bench = { mode: "app", file: await app.ensureWorkbench(), workbench: true };
+      return app.withRendering(async () => {
+        if (url && rest.action !== "load-page") {
+          const loaded = await browserCall(bench, { action: "load-page", url });
+          if (loaded.isError) return fromApp(withHint(loaded, url), bench);
+        }
+        if (reading) return fromApp(await browserCall(bench, { ...rest, ...(rest.action === "load-page" ? { url } : {}) }), bench);
+
+        const before = readPrinted(await appExec(bench.file, snippets.topLevelIds()), "IDS");
+        const res = await browserCall(bench, rest);
+        if (res.isError) return fromApp(withHint(res, url), bench);
+        const created = readPrinted(await appExec(bench.file, snippets.topLevelIds()), "IDS").filter((id) => !before.includes(id));
+        if (!created.length) return fromApp(res, bench, "Nothing new appeared on the canvas to move.");
+        const nodes = readPrinted(await appExec(bench.file, snippets.exportNodes(created)), "NODES");
+        await appExec(bench.file, snippets.deleteNodes(created));
+        return place(dest, carryImages(nodes, path.dirname(bench.file), path.dirname(dest.file)), textOf(res));
+      });
     });
   },
 );
+
+/** Runs a snippet in an app document; returns the printed text or throws with the app's error. */
+async function appExec(file, input) {
+  const res = await app.call("execute", { filePath: file, input });
+  if (res.isError) throw new Error(textOf(res));
+  return textOf(res);
+}
+
+/** Rebuilds nodes in the destination document, headless or in the app, and reports the new ids. */
+async function place(dest, nodes, what) {
+  const input = snippets.insertNodes(nodes);
+  const describe = (text) => {
+    const created = readPrinted(text, "NEW");
+    return `${what}\nMoved into ${dest.file} as: ${created.map((n) => `"${n.id}" (${n.name})`).join(", ")}`;
+  };
+  if (dest.mode === "app") {
+    const res = await appWrite(dest, "execute", { input });
+    if (res.isError) return res;
+    return { ...res, content: [res.content[0], { type: "text", text: describe(textOf(res)) }, ...res.content.slice(-1)] };
+  }
+  return pool.use(dest.file, async (session, warnings) => {
+    const res = await session.shell.call("execute", { input });
+    if (res.error) return fail(res.error, dest.file);
+    session.dirty = true;
+    if (config.autosave) await pool.save(session);
+    return ok(describe(res.text), warnings, dest.file);
+  });
+}
+
+/** A browser node lives in a document, so it is driven in that document's own window. */
+async function browserNode(f, url, rest, reading) {
+  const target = await route(f, { needsApp: true, tool: "browser" });
+  return withMachineLock(BROWSER_LOCK, () =>
+    app.withRendering(async () => {
+      if (url && rest.action !== "load-page") {
+        const loaded = await browserCall(target, { action: "load-page", url, nodeId: rest.nodeId });
+        if (loaded.isError) return fromApp(withHint(loaded, url), target);
+      }
+      const args = { ...rest, ...(rest.action === "load-page" ? { url } : {}) };
+      return reading ? fromApp(await browserCall(target, args), target) : appWrite(target, "browser", args, browserCall);
+    }),
+  );
+}
 
 // A window the app has just opened answers "No handler found for method 'browser'" until its
 // browser is ready; give it a few seconds before reporting a failure.
@@ -312,35 +370,12 @@ async function browserCall(target, args) {
 
 const withHint = (res, url) =>
   res.isError && !url
-    ? {
-        ...res,
-        content: [
-          ...res.content,
-          { type: "text", text: "Each pen.dev app window has its own browser. Pass url so the page is loaded in this document's window first." },
-        ],
-      }
+    ? { ...res, content: [...res.content, { type: "text", text: "Pass url to load the page and act on it in one step." }] }
     : res;
-
-const pick = (obj, ...keys) => Object.fromEntries(keys.filter((k) => obj[k] !== undefined).map((k) => [k, obj[k]]));
-
-/**
- * Read actions do not touch the document, so any file will do: the file itself when the app has
- * it open, otherwise the app's active document, which owns the browser sidebar in use.
- */
-async function browserTarget(f) {
-  if (!(await app.available())) throw new AppUnavailableError("browser needs the pen.dev desktop app, which is not running.");
-  if (f) {
-    const file = normalize(f);
-    if ((await app.openFiles()).has(file)) return { mode: "app", file };
-  }
-  const active = await app.activeFile();
-  if (!active) throw new Error("The pen.dev app has no document open, so its browser is not available. Open any document in the app.");
-  return { mode: "app", file: active };
-}
 
 tool(
   "spawn_agents",
-  `Split a design task across several designer agents that work in parallel inside the pen.dev app. filePath is opened in the app in the background if needed (the app is never brought to the front). Always create one agent fewer than needed: this session does the last part.
+  `Split a design task across several designer agents that work in parallel inside the pen.dev app, on a document open there (filePath, or the active document when omitted). pen-multi does not open documents for this; for a file that is not open in the app, use your own subagents on the same filePath instead. Always create one agent fewer than needed: this session does the last part.
 
 - Use it for multiple sections, screens, websites, or variations of a design.
 - Create placeholder container nodes first and pass their ids in containerNodes; put related sections under one parent node. Do not set placeholder on those nodes or their parent.

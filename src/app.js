@@ -33,7 +33,15 @@ export const appConfig = {
   openTimeoutMs: Number(process.env.PEN_MULTI_APP_OPEN_TIMEOUT_MS ?? 90_000),
   // Test hook: a JSON file listing the documents open in the app, instead of reading `ps`.
   docsFile: process.env.PEN_MULTI_APP_DOCS_FILE,
+  // "0" skips macOS UI scripting (hiding Pen, moving the workbench window); used by tests.
+  ui: process.env.PEN_MULTI_APP_UI !== "0",
+  workbench: process.env.PEN_MULTI_WORKBENCH ?? path.join(os.homedir(), ".pen-multi", "workbench", "workbench.pen"),
 };
+
+const osa = (script) =>
+  new Promise((resolve) =>
+    execFile("osascript", ["-e", script], { timeout: 10_000 }, (err, out) => resolve(err ? null : out.trim())),
+  );
 
 export class AppUnavailableError extends Error {}
 
@@ -157,6 +165,93 @@ export class AppBridge {
     throw new Error(`The pen.dev app did not open ${file} within ${appConfig.openTimeoutMs / 1000}s.`);
   }
 
+  /** Whether Pen's windows are shown (not hidden with Cmd+H). */
+  async penVisible() {
+    if (!appConfig.ui) return true;
+    return (await osa('tell application "System Events" to get visible of process "Pen"')) !== "false";
+  }
+
+  async setPenVisible(visible) {
+    if (appConfig.ui) await osa(`tell application "System Events" to set visible of process "Pen" to ${visible}`);
+  }
+
+  /**
+   * The app renders web pages and canvas imports only while its windows are shown; hidden, those
+   * calls time out. If the user has hidden Pen, show it for the duration of fn and hide it again.
+   * Showing never brings Pen to the front: its windows stay behind the app the user is in.
+   */
+  async withRendering(fn) {
+    const wasVisible = await this.penVisible();
+    if (!wasVisible) {
+      await this.setPenVisible(true);
+      await sleep(500);
+    }
+    try {
+      return await fn();
+    } finally {
+      if (!wasVisible) await this.setPenVisible(false);
+    }
+  }
+
+  /**
+   * The workbench is one scratch document pen-multi keeps open in the app, with its window moved
+   * off screen, for every browser action. The user's own windows are never opened or touched.
+   * Opening it shows a window once (behind the user's app) until it is moved away.
+   */
+  async ensureWorkbench() {
+    const file = this.resolvePath(appConfig.workbench);
+    if (!(await this.openFiles()).has(file)) {
+      if (!fs.existsSync(file)) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        await runCli(["interactive", "-o", file], ["save()", "exit()"]);
+      }
+      const wasVisible = await this.penVisible();
+      const previous = await this.activeFile().catch(() => null);
+      // Opening makes the workbench the app's active window. Re-activating the user's window would
+      // raise Pen above other apps, so remember which document was theirs instead.
+      if (previous) this.#rememberUserActive(previous);
+      await this.openInBackground(file);
+      await this.#moveOffScreen(file);
+      if (!wasVisible) await this.setPenVisible(false);
+    } else {
+      await this.#moveOffScreen(file); // in case the user brought it back
+    }
+    return file;
+  }
+
+  #rememberUserActive(file) {
+    try {
+      fs.writeFileSync(`${this.workbenchFile}.user-active`, file);
+    } catch {}
+  }
+
+  /**
+   * The user's document for calls without a filePath: the app's active one, or, while the
+   * workbench holds that role, the one that was active before pen-multi opened the workbench.
+   */
+  async userActiveFile() {
+    const active = await this.activeFile();
+    if (active !== this.workbenchFile) return active;
+    try {
+      const remembered = fs.readFileSync(`${this.workbenchFile}.user-active`, "utf8").trim();
+      return (await this.openFiles()).has(remembered) ? remembered : null;
+    } catch {
+      return null;
+    }
+  }
+
+  get workbenchFile() {
+    return this.resolvePath(appConfig.workbench);
+  }
+
+  async #moveOffScreen(file) {
+    if (!appConfig.ui) return;
+    // macOS keeps a sliver of the window on screen, in the bottom-left corner.
+    await osa(
+      `tell application "System Events" to tell process "Pen" to set position of window "${path.basename(file)}" to {-20000, 20000}`,
+    );
+  }
+
   /**
    * Saves an open app document to disk through the CLI's app mode, which reaches the app's
    * save command. The CLI reports success even for a document that is not open, so success is
@@ -183,7 +278,7 @@ export class AppBridge {
   async #client() {
     if (this.client) return this.client;
     this.connecting ??= (async () => {
-      const client = new Client({ name: "pen-multi", version: "0.3.0" });
+      const client = new Client({ name: "pen-multi", version: "0.4.0" });
       const transport = new StdioClientTransport({
         command: appConfig.server,
         args: ["--app", "desktop", "--agent", appConfig.agent, "--enable_spawn_agents"],

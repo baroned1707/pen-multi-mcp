@@ -14,6 +14,7 @@ const stateFile = path.join(root, "app-state.json");
 const home = path.join(root, "home");
 const doc = (name) => path.join(root, name);
 const live = doc("live.pen"); // the app's active document
+const workbench = doc("workbench.pen");
 const background = doc("background.pen"); // open in a background window of the app
 // `ready`: windows whose browser already answers (see fake-app.mjs); new windows start not ready.
 const setApp = (state) => fs.writeFileSync(stateFile, JSON.stringify({ page: "", ready: [live, background], ...state }));
@@ -27,6 +28,8 @@ const withApp = (extra = {}) => ({
   PEN_MULTI_APP_SOCKET: "none",
   PEN_MULTI_APP_DOCS_FILE: stateFile,
   PEN_MULTI_APP_OPEN_CMD: JSON.stringify([here("./fake-open.mjs"), stateFile]),
+  PEN_MULTI_APP_UI: "0",
+  PEN_MULTI_WORKBENCH: workbench,
   FAKE_ACTIVE_FILE: stateFile,
   ...extra,
 });
@@ -93,42 +96,44 @@ test("a failing snippet in the app comes back as an error result and the app sta
   assert.match(text(await call(s, "execute", { filePath: live, input: "after" })), /APP-EXECUTE .*after/);
 });
 
-test("browser read actions work on a headless file without opening it in the app", async () => {
+test("browser runs in the workbench: the user's file is never opened and their active window is kept", async () => {
   const file = doc("reads.pen");
   const res = await call(s, "browser", { filePath: file, action: "return-screenshot", url: "https://a.example" });
   assert.ok(!res.isError, text(res));
-  assert.match(text(res), /action=return-screenshot page=https:\/\/a\.example/, "loaded and read in one step");
-  assert.ok(!appState().open.includes(file), "not opened in the app");
+  assert.match(text(res), /pen-multi workbench/);
+  assert.match(text(res), new RegExp(`APP-BROWSER doc=${workbench} action=return-screenshot page=https://a.example`));
+  assert.ok(!appState().open.includes(file), "the user's file was not opened");
+  assert.equal(appState().active, workbench, "opening the workbench made it the app's active window");
+  assert.match(
+    text(await call(s, "execute", { input: "still-mine" })),
+    new RegExp(`APP-EXECUTE doc=${live}`),
+    "calls without filePath still go to the user's document",
+  );
 });
 
-test("import-to-canvas opens a headless file in the app in the background, then imports and saves", async () => {
-  const file = doc("import.pen");
-  await call(s, "execute", { filePath: file, input: "headless-first" }); // held by a headless editor here
-  const res = await call(s, "browser", { filePath: file, action: "import-to-canvas", url: "https://b.example" });
-  assert.ok(!res.isError, text(res));
-  assert.match(text(res), /import\.pen \(in the pen\.dev desktop app, opened in the background\)/);
-  assert.match(text(res), new RegExp(`APP-BROWSER doc=${file} action=import-to-canvas page=https://b.example`));
-  assert.match(text(res), /Saved to disk/);
-  const list = JSON.parse(text(await call(s, "list_sessions", {})));
-  assert.ok(!list.sessions.some((x) => x.filePath === file), "the headless editor handed the file over");
-});
-
-test("spawn_agents opens a file in the app when needed and works there", async () => {
+test("spawn_agents on a file not open in the app does not open it, and says what to do instead", async () => {
   const file = doc("spawn.pen");
   const res = await call(s, "spawn_agents", { filePath: file, config: [{ prompt: "p", containerNodes: ["n1"] }] });
-  assert.ok(!res.isError, text(res));
-  assert.match(text(res), new RegExp(`APP-SPAWN doc=${file} agents=1`));
-  assert.ok(fs.existsSync(file), "a new file is created before the app opens it");
+  assert.equal(res.isError, true);
+  assert.match(text(res), /never opens windows/);
+  assert.match(text(res), /your own subagents/);
+  assert.ok(!appState().open.includes(file));
 });
 
-test("a file another agent edits headlessly is not pulled into the app", async () => {
+test("spawn_agents on a document open in the app runs there", async () => {
+  const res = await call(s, "spawn_agents", { filePath: background, config: [{ prompt: "p", containerNodes: ["n1"] }] });
+  assert.ok(!res.isError, text(res));
+  assert.match(text(res), new RegExp(`APP-SPAWN doc=${background} agents=1`));
+});
+
+test("a file another agent edits headlessly is not also edited through the app", async () => {
   const file = doc("held.pen");
   const other = await agent({ ...withApp(), PEN_MULTI_APP: "0" });
   assert.ok(!(await call(other, "execute", { filePath: file, input: "mine" })).isError);
-  const res = await call(s, "browser", { filePath: file, action: "import-to-canvas" });
+  setApp({ active: live, open: [live, background, file] }); // the user opens it in the app too
+  const res = await call(s, "execute", { filePath: file, input: "theirs" });
   assert.equal(res.isError, true);
   assert.match(text(res), /being edited by another agent/);
-  assert.ok(!appState().open.includes(file));
 });
 
 test("a file open both headlessly here and in the app is refused instead of overwritten", async () => {
@@ -154,6 +159,14 @@ test("agents take turns on the shared browser, so a load and a read are never sp
   assert.match(text(rb), /page=https:\/\/two\.example/);
 });
 
+test("an agent never mistakes the workbench for the user's document", async () => {
+  fs.rmSync(`${workbench}.user-active`, { force: true }); // nothing remembered
+  setApp({ active: workbench, open: [live, background, workbench] });
+  const res = await call(s, "execute", { input: "where" });
+  assert.equal(res.isError, true);
+  assert.match(text(res), /workbench, not a design/);
+});
+
 test("a save the app did not perform is reported, not claimed", async () => {
   const quiet = await agent(withApp({ FAKE_SAVE_NOOP: "1" }));
   const res = await call(quiet, "execute", { filePath: live, input: "unsaved" });
@@ -172,6 +185,8 @@ test("without the app, app-only tools explain what to do instead", async () => {
   const b = await call(noApp, "browser", { action: "load-page", url: "https://example.com" });
   assert.equal(b.isError, true);
   assert.match(text(b), /needs the pen\.dev desktop app/);
+  const imp = await call(noApp, "browser", { filePath: doc("solo.pen"), action: "import-to-canvas", url: "https://example.com" });
+  assert.equal(imp.isError, true);
   const sp = await call(noApp, "spawn_agents", { filePath: live, config: [{ prompt: "p", containerNodes: ["n"] }] });
   assert.equal(sp.isError, true);
   assert.match(text(sp), /your own subagents/);
