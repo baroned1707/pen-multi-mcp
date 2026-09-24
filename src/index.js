@@ -40,7 +40,7 @@ Many agents and projects:
 - A file can be edited headlessly by only one agent at a time; the error names the agent's project holding it. fork_version copies a file so you can work on a separate version in parallel.
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.`;
 
-const server = new McpServer({ name: "pen-multi", version: "0.4.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "0.5.0" }, { instructions: INSTRUCTIONS });
 
 const filePath = z
   .string()
@@ -135,10 +135,10 @@ async function routeUntimed(f, { needsApp = false, tool: toolName, write = false
     return { mode: "headless", file };
   }
   let openInApp = (await app.windowFiles()).has(file);
-  if (!openInApp) {
+  if (!openInApp && (await app.activeFile().catch(() => null)) === file) {
     // Dashboard-opened documents have no window entry and are only known as the active one.
     // For a write, confirm that with a fresh read rather than a cached one that may be stale.
-    openInApp = (await app.activeFile({ fresh: write }).catch(() => null)) === file;
+    openInApp = !write || (await app.activeFile({ fresh: true }).catch(() => null)) === file;
   }
   if (!openInApp) {
     // Opening the user's file in the app would put a window in front of whatever they are doing.

@@ -80,7 +80,8 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 
 ## Behaviour
 
-- **Autosave**: after every successful `execute`, the document is saved to its `filePath`.
+- **Autosave**: every successful change is saved in the background right after the call returns (`PEN_MULTI_SAVE_DELAY_MS`, default 1500 ms of no further writes; bursts coalesce into one save). `save`, `close_file`, `fork_version`, eviction and shutdown flush first. Call `save` before reading a `.pen` from disk or committing it. A failed save is reported on the next call for that file and in `list_sessions`.
+- **App state**: the list of app windows is read on every call; the app's active document is cached for `PEN_MULTI_APP_STATE_TTL_MS` (2000 ms) and re-read whenever a write depends on it. `list_sessions` reports median/p90 timings for routing, calls and saves.
 - **Timeouts**: a call that runs past `PEN_MULTI_CALL_TIMEOUT_MS` stops that file's editor (its late output would otherwise leak into the next call); the next call reopens the file from disk.
 - **Paths** are resolved through symlinks, so `/tmp/x.pen` and `/private/tmp/x.pen` share one editor and one lock.
 - **Idle files** close after 15 minutes. Each open file costs roughly 500–650 MB of RAM.
@@ -91,6 +92,8 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 | Env var | Default | |
 |---|---|---|
 | `PEN_MULTI_AUTOSAVE` | `1` | `0` keeps changes in memory until `save` |
+| `PEN_MULTI_SAVE_DELAY_MS` | `1500` | Idle time before a background save |
+| `PEN_MULTI_APP_STATE_TTL_MS` | `2000` | How long the app's active document is cached |
 | `PEN_MULTI_MAX_SESSIONS` | `4` | Open files per agent |
 | `PEN_MULTI_GLOBAL_MAX_SESSIONS` | `8` | Open files across all agents on the machine |
 | `PEN_MULTI_WAIT_FOR_SLOT_SECONDS` | `120` | How long a call waits for a free slot |
