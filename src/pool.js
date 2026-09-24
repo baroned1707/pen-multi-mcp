@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -102,7 +101,7 @@ export class FileLock {
     if (readJson(this.path).pid === process.pid) fs.rmSync(this.path, { force: true });
   }
 
-  /** Live locks held by any pen-multi process on this machine; stale ones are removed. */
+  /** Live file locks held by any pen-multi process on this machine (not mutexes); stale ones are removed. */
   static live() {
     let names = [];
     try {
@@ -114,21 +113,36 @@ export class FileLock {
     for (const n of names) {
       const file = path.join(config.lockDir, n);
       const h = readJson(file);
-      if (h.pid && isAlive(h.pid)) holders.push(h);
-      else fs.rmSync(file, { force: true });
+      if (!h.pid || !isAlive(h.pid)) fs.rmSync(file, { force: true });
+      else if (!h.file?.startsWith("mutex:")) holders.push(h);
     }
     return holders;
   }
 }
 
-// Best effort: the desktop app only exposes the file each window was launched with.
-function openInDesktopApp(file) {
+/**
+ * Machine-wide mutex shared by every pen-multi process, e.g. for the app's single integrated
+ * browser, so one agent's page load cannot land between another agent's load and read.
+ */
+export async function withMachineLock(name, fn, { waitMs = config.waitForSlotMs } = {}) {
+  const lock = new FileLock(`mutex:${name}`);
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      lock.acquire();
+      break;
+    } catch (err) {
+      if (!/being edited by another agent/.test(err.message)) throw err;
+      if (Date.now() > deadline) {
+        throw new Error(`Timed out after ${waitMs / 1000}s waiting for the shared ${name}, held by another agent.`);
+      }
+      await sleep(250);
+    }
+  }
   try {
-    const ps = execFileSync("ps", ["-axww", "-o", "command="], { encoding: "utf8", maxBuffer: 32 << 20 });
-    const uri = "file://" + encodeURI(file);
-    return ps.split("\n").some((l) => l.includes("Pen Helper (Renderer)") && l.includes(`"fileURI":"${uri}"`));
-  } catch {
-    return false;
+    return await fn();
+  } finally {
+    lock.release();
   }
 }
 
@@ -216,12 +230,6 @@ export class SessionPool {
         );
       }
     }
-    if (openInDesktopApp(file)) {
-      warnings.push(
-        `${file} is also open in the pen.dev desktop app. Edits saved here are not reloaded by the app, and saving in the app will overwrite them.`,
-      );
-    }
-
     new FileLock(file).assertNotHeldElsewhere(); // fail fast, before waiting for a slot
     await this.#makeRoom();
     const session = new Session({ file, inPath: source });

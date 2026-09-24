@@ -1,15 +1,26 @@
+import { execFile, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { resolveCliEntry, stripAnsi } from "./shell.js";
 
 // The pen.dev desktop app's own MCP server. pen-multi runs it as a child to reach features
 // only the app has (integrated browser, spawn_agents, the user's live canvas and selection).
 const DEFAULT_SERVER = "/Applications/Pen.app/Contents/Resources/app.asar.unpacked/out/mcp-server-darwin-arm64";
 const DEFAULT_SOCKET = path.join(os.homedir(), ".pencil", "socket", "pencil-desktop.sock");
+
+const envJson = (name, fallback) => {
+  try {
+    return process.env[name] ? JSON.parse(process.env[name]) : fallback;
+  } catch {
+    return fallback;
+  }
+};
 
 export const appConfig = {
   enabled: process.env.PEN_MULTI_APP !== "0",
@@ -17,17 +28,27 @@ export const appConfig = {
   agent: process.env.PEN_MULTI_APP_AGENT ?? "claudeCodeCLI",
   // "none" skips the socket probe (used by tests with a fake app server).
   socket: process.env.PEN_MULTI_APP_SOCKET ?? DEFAULT_SOCKET,
+  // Opens a document in the app WITHOUT bringing the app to the front (-g).
+  openCommand: envJson("PEN_MULTI_APP_OPEN_CMD", ["open", "-g", "-a", "Pen"]),
+  openTimeoutMs: Number(process.env.PEN_MULTI_APP_OPEN_TIMEOUT_MS ?? 90_000),
+  // Test hook: a JSON file listing the documents open in the app, instead of reading `ps`.
+  docsFile: process.env.PEN_MULTI_APP_DOCS_FILE,
 };
 
 export class AppUnavailableError extends Error {}
 
 const ACTIVE = /Currently active canvas editor: `([^`]+)`/;
+const stripCode = (text) => text.replace(/^MCP error -?\d+: /, "");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export const textOf = (res) => (res.content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
 
 export class AppBridge {
   constructor(resolvePath) {
     this.resolvePath = resolvePath;
     this.client = null;
     this.connecting = null;
+    this.saving = new Map(); // file -> queue of saves, so saves of one document never overlap
   }
 
   /** Whether the desktop app is running and reachable right now. */
@@ -68,12 +89,90 @@ export class AppBridge {
     }
   }
 
-  /** Resolved path of the document in the app's active tab, or null. */
+  /** Resolved path of the document in the app's active window, or null. */
   async activeFile() {
     if (!(await this.available())) return null;
     const res = await this.call("get_app_state");
     const match = ACTIVE.exec(textOf(res));
     return match ? this.resolvePath(match[1]) : null;
+  }
+
+  /**
+   * Documents open in the app, active or not. The official server routes a filePath correctly
+   * to any open document; only unopened ones fall back to the active document.
+   * Each app window is a renderer process launched with its document's URI, so `ps` lists them.
+   */
+  async openFiles() {
+    if (!(await this.available())) return new Set();
+    const files = new Set();
+    const active = await this.activeFile().catch(() => null);
+    if (active) files.add(active);
+    for (const f of this.#windowFiles()) files.add(this.resolvePath(f));
+    return files;
+  }
+
+  #windowFiles() {
+    if (appConfig.docsFile) {
+      try {
+        const docs = JSON.parse(fs.readFileSync(appConfig.docsFile, "utf8"));
+        return Array.isArray(docs) ? docs : (docs.open ?? []);
+      } catch {
+        return [];
+      }
+    }
+    try {
+      const ps = execFileSync("ps", ["-axww", "-o", "command="], { encoding: "utf8", maxBuffer: 32 << 20 });
+      const files = [];
+      for (const line of ps.split("\n")) {
+        if (!line.includes("Pen Helper (Renderer)")) continue;
+        for (const [, uri] of line.matchAll(/"fileURI":"(file:\/\/[^"]+)"/g)) {
+          try {
+            files.push(fileURLToPath(uri));
+          } catch {}
+        }
+      }
+      return files;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Opens `file` in the app in the background: the app is never brought to the front, so it
+   * does not take focus from whatever the user is working in. Resolves once the app has it open.
+   */
+  async openInBackground(file) {
+    if ((await this.openFiles()).has(file)) return;
+    const [cmd, ...args] = appConfig.openCommand;
+    await new Promise((resolve, reject) =>
+      execFile(cmd, [...args, file], (err) =>
+        err ? reject(new Error(`could not open ${file} in the pen.dev app: ${err.message}`)) : resolve(),
+      ),
+    );
+    const deadline = Date.now() + appConfig.openTimeoutMs;
+    while (Date.now() < deadline) {
+      if ((await this.openFiles()).has(file)) return;
+      await sleep(500);
+    }
+    throw new Error(`The pen.dev app did not open ${file} within ${appConfig.openTimeoutMs / 1000}s.`);
+  }
+
+  /**
+   * Saves an open app document to disk through the CLI's app mode, which reaches the app's
+   * save command. The CLI reports success even for a document that is not open, so success is
+   * judged by the file's modification time, never by the CLI's output.
+   */
+  save(file) {
+    const prev = this.saving.get(file) ?? Promise.resolve();
+    const run = async () => {
+      const before = fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0;
+      await runCli(["interactive", "-a", "desktop", "-i", file], ["save()", "exit()"]);
+      const after = fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0;
+      if (after <= before) throw new Error(`the pen.dev app did not write ${file} to disk`);
+    };
+    const next = prev.then(run, run);
+    this.saving.set(file, next.catch(() => {}));
+    return next;
   }
 
   async close() {
@@ -84,7 +183,7 @@ export class AppBridge {
   async #client() {
     if (this.client) return this.client;
     this.connecting ??= (async () => {
-      const client = new Client({ name: "pen-multi", version: "0.2.0" });
+      const client = new Client({ name: "pen-multi", version: "0.3.0" });
       const transport = new StdioClientTransport({
         command: appConfig.server,
         args: ["--app", "desktop", "--agent", appConfig.agent, "--enable_spawn_agents"],
@@ -93,6 +192,7 @@ export class AppBridge {
       });
       await client.connect(transport);
       client.onclose = () => this.#reset();
+      await warmUp(client);
       this.client = client;
       return client;
     })().finally(() => (this.connecting = null));
@@ -106,6 +206,38 @@ export class AppBridge {
   }
 }
 
-const stripCode = (text) => text.replace(/^MCP error -?\d+: /, "");
+/**
+ * The app's server answers the first call on a new connection with "failed to execute tool call.
+ * you are probably referencing the wrong .pen file" and works from then on. A read-only call
+ * absorbs that before the connection carries real work, where a failed write would be misleading.
+ */
+async function warmUp(client) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await client.callTool({ name: "get_app_state", arguments: {} }, undefined, { timeout: 60_000 }).catch(() => null);
+    if (res && !res.isError) return;
+    await sleep(200);
+  }
+}
 
-export const textOf = (res) => (res.content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+/** Runs a short-lived CLI session with the given shell lines; resolves with its output. */
+function runCli(args, lines, timeoutMs = 120_000) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(process.execPath, [resolveCliEntry(), ...args], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+    });
+    let out = "";
+    proc.stdout.on("data", (d) => (out += d));
+    proc.stderr.on("data", (d) => (out += d));
+    const timer = setTimeout(() => {
+      proc.kill("SIGTERM");
+      reject(new Error(`pen CLI ${args.join(" ")} timed out`));
+    }, timeoutMs);
+    proc.on("exit", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(stripAnsi(out));
+      else reject(new Error(`pen CLI exited with ${code}: ${stripAnsi(out).trim().slice(-500)}`));
+    });
+    proc.stdin.end(lines.join("\n") + "\n");
+  });
+}

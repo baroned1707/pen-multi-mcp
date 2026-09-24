@@ -11,10 +11,14 @@ The official `pencil` MCP server forwards every call to the single running deskt
 
 | Target | Backend |
 |---|---|
-| The **active tab** of the running pen.dev app, or no `filePath` | The app, through its own MCP server binary, run as a child. Edits are live on the user's canvas. |
+| A file **open in the running pen.dev app** (any window), or no `filePath` | The app, through its own MCP server binary, run as a child. Edits are live on the user's canvas, then saved to disk. |
 | Any other `.pen` file | Its own headless [`@pen.dev/cli`](https://www.npmjs.com/package/@pen.dev/cli) `pen interactive` process. No app needed. |
 
-The active tab is re-checked before every app call, so a file is never silently sent to another document. The CLI and the app's server are used as-is: not modified, patched or bundled.
+Before every app call, pen-multi checks that the app really has the file open (its active window, or a window whose renderer process was launched with that file), so a file is never silently sent to another document. The CLI and the app's server are used as-is: not modified, patched or bundled.
+
+**The app never takes focus.** When a tool needs a file in the app that is not open there (`import-to-canvas`, `screenshot-to-canvas`, `spawn_agents`), pen-multi opens it with `open -g`, which adds a window to Pen without bringing Pen to the front. If this agent had the file open headlessly, it is saved and handed over first.
+
+**App documents are saved to disk** after each successful change, through the CLI's app mode (`pen interactive -a desktop`), which reaches the app's save command without focusing it. That CLI reports "Saved" even for documents the app does not have open, so pen-multi checks the file's modification time instead of trusting the output. This also saves the user's own unsaved edits in that document.
 
 ## Parity with the official server
 
@@ -24,11 +28,11 @@ The active tab is re-checked before every app call, so a file is never silently 
 | `get_style({ name, params })` | Same |
 | `get_app_state()` | Same with no `filePath` (app state, selection, browser); with `filePath`, the state of that file |
 | `execute` | Same; `filePath` optional as in the official server |
-| `browser` | Proxied to the app, on its active document (the CLI cannot run the integrated browser) |
-| `spawn_agents` | Proxied to the app, on its active document |
+| `browser` | Read actions (`load-page`, `return-element`, `return-screenshot`) work with any file; canvas actions open the file in the app in the background. Pass `url` with any action to load and act in one step. |
+| `spawn_agents` | Runs in the app; opens the file there in the background if needed. Without the app, the error tells the agent to use its own subagents on the same file instead. |
 | — | Extra: `open_file`, `fork_version`, `save`, `close_file`, `list_sessions` |
 
-`browser` and `spawn_agents` need the desktop app with the target document as its active tab; without it they return an error saying so.
+`browser` and `spawn_agents` need the desktop app running (the CLI cannot run the integrated browser). Each app window has its own browser; agents take turns on them through a machine-wide lock, so one agent's page load cannot land between another agent's load and read.
 
 ## Setup
 
@@ -49,7 +53,7 @@ It can run next to the official `pencil` server.
 | `read_skill`, `get_style` | Same as the official server (cached; no design file needed) |
 | `execute` | Run a snippet against `filePath` (or the app's active document); supports `editId` + `edits` retries |
 | `get_app_state` | Document state of one file, or of the app |
-| `browser`, `spawn_agents` | App features, on the app's active document |
+| `browser`, `spawn_agents` | App features; the file is opened in the app in the background when needed |
 | `open_file` | Open a file explicitly, or create a new version from `sourcePath` |
 | `fork_version` | Copy a file to a new path to work on a separate version |
 | `save` | Write to disk (only needed with autosave off) |
@@ -75,7 +79,7 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 - **Paths** are resolved through symlinks, so `/tmp/x.pen` and `/private/tmp/x.pen` share one editor and one lock.
 - **Idle files** close after 15 minutes. Each open file costs roughly 500–650 MB of RAM.
 - **Snippet run time**: the CLI's sandbox interrupts a snippet that runs for too long (`InternalError: interrupted`); split long work into several `execute` calls.
-- **Desktop app**: a file that is the app's active tab is edited in the app, never headlessly. If a file is already open headlessly when it becomes the active tab, calls are refused until one side lets go, instead of the two editors overwriting each other. The server also warns when a headless file is open in a background tab of the app, and when a source file is 0 bytes on disk (its content may exist only unsaved in the app).
+- **Desktop app**: a file open in the app is edited in the app, never headlessly. If a file is already open headlessly when the user opens it in the app, calls are refused until one side lets go, instead of the two editors overwriting each other. A file another agent holds headlessly is never pulled into the app. The server also warns when a source file is 0 bytes on disk (its content may exist only unsaved in the app).
 - `Export()` relative paths resolve next to the `.pen` file. Generated images are written to `images/` next to it.
 
 | Env var | Default | |
@@ -92,11 +96,15 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 | `PEN_MULTI_APP` | `1` | `0` never uses the desktop app |
 | `PEN_MULTI_APP_SERVER` | the app's bundled `mcp-server` | Path to the app's MCP server binary |
 | `PEN_MULTI_APP_AGENT` | `claudeCodeCLI` | Agent name reported to the app |
+| `PEN_MULTI_APP_OPEN_CMD` | `["open","-g","-a","Pen"]` | JSON command that opens a file in the app without focusing it |
+| `PEN_MULTI_APP_OPEN_TIMEOUT_MS` | `90000` | How long to wait for the app to open a file |
 
 ## Limitations
 
 - Headless files have no live view: open them in the app afterwards to look at them.
-- App-routed edits are saved to disk when the document is saved in the app, not by pen-multi.
+- Windows pen-multi opens in the app stay open; close them in Pen when done.
+- Documents opened in the app from its dashboard (not from a file) may not be detected as open, since detection reads each window's launch file; such a file is then edited headlessly.
+- `spawn_agents` has only been tested against a fake app; its designer agents run on the app's own AI settings.
 - Responses are read from the CLI's interactive shell output, so a CLI update could change the format. The CLI version is pinned in `package.json`; run `npm test` after bumping it.
 - `Generate(...)`, `get_style` and login go through pen.dev's backend like the app does.
 
