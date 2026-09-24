@@ -92,11 +92,12 @@ const heldByOtherAgent = (file) => {
  * it open (or has just opened it in the background): the official server silently falls back to
  * the active document for files it does not have open.
  */
-async function route(f, { needsApp = false, tool: toolName } = {}) {
+async function route(f, { needsApp = false, tool: toolName, write = false } = {}) {
   const appUp = await app.available();
   const unavailable = (msg) => new AppUnavailableError([msg, APP_ONLY_HELP[toolName]].filter(Boolean).join(" "));
   if (!f) {
-    const active = appUp ? await app.userActiveFile() : null;
+    // A write without filePath targets whatever is active now, so never trust the cache for it.
+    const active = appUp ? await app.userActiveFile({ fresh: write }) : null;
     if (active) return { mode: "app", file: active };
     if (appUp && (await app.activeFile()) === app.workbenchFile) {
       throw new Error("The pen.dev app's active window is pen-multi's workbench, not a design. Pass filePath.");
@@ -116,7 +117,13 @@ async function route(f, { needsApp = false, tool: toolName } = {}) {
     if (needsApp) throw unavailable("This needs the pen.dev desktop app, which is not running.");
     return { mode: "headless", file };
   }
-  if (!(await app.openFiles()).has(file)) {
+  let openInApp = (await app.windowFiles()).has(file);
+  if (!openInApp) {
+    // Dashboard-opened documents have no window entry and are only known as the active one.
+    // For a write, confirm that with a fresh read rather than a cached one that may be stale.
+    openInApp = (await app.activeFile({ fresh: write }).catch(() => null)) === file;
+  }
+  if (!openInApp) {
     // Opening the user's file in the app would put a window in front of whatever they are doing.
     if (needsApp) {
       throw new Error(
@@ -130,6 +137,7 @@ async function route(f, { needsApp = false, tool: toolName } = {}) {
   const other = heldByOtherAgent(file);
   if (other) throw new Error(`Cannot use ${file} in the pen.dev app: ${other}`);
   if (pool.sessions.has(file)) {
+    app.invalidate();
     throw new Error(
       `${file} is open both headlessly here and in the pen.dev app, and the two would overwrite each other. ` +
         `close_file it here (this saves it), then reload it in the app so the app has the saved version.`,
@@ -250,7 +258,7 @@ tool(
   async ({ filePath: f, input, editId, edits }) => {
     if (!input && !(editId && edits)) throw new Error("Provide `input`, or `editId` together with `edits`.");
     const payload = input ? { input } : { editId, edits };
-    const target = await route(f);
+    const target = await route(f, { write: true });
     if (target.mode === "app") return appWrite(target, "execute", payload);
     const file = target.file;
     return pool.use(file, async (session, warnings) => {
@@ -296,7 +304,7 @@ The browser is shared by all agents: pass url with any other action to load the 
     const reading = BROWSER_READS.has(rest.action);
     if (rest.nodeId) return browserNode(f, url, rest, reading);
     if (!(await app.available())) throw new AppUnavailableError("browser needs the pen.dev desktop app, which is not running.");
-    const dest = reading ? null : await route(f); // resolve the destination before touching the browser
+    const dest = reading ? null : await route(f, { write: true }); // resolve the destination before touching the browser
 
     return withMachineLock(BROWSER_LOCK, async () => {
       const bench = { mode: "app", file: await app.ensureWorkbench(), workbench: true };
@@ -350,7 +358,7 @@ async function place(dest, nodes, what) {
 
 /** A browser node lives in a document, so it is driven in that document's own window. */
 async function browserNode(f, url, rest, reading) {
-  const target = await route(f, { needsApp: true, tool: "browser" });
+  const target = await route(f, { needsApp: true, tool: "browser", write: !reading });
   return withMachineLock(BROWSER_LOCK, () =>
     app.withRendering(async () => {
       if (url && rest.action !== "load-page") {
@@ -401,7 +409,7 @@ tool(
       .describe("The config for the extra agents that will be spawned and run in parallel alongside the current agent."),
   },
   async ({ filePath: f, config: agents }) => {
-    const target = await route(f, { needsApp: true, tool: "spawn_agents" });
+    const target = await route(f, { needsApp: true, tool: "spawn_agents", write: true });
     return appWrite(target, "spawn_agents", { config: agents });
   },
 );

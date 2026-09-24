@@ -209,3 +209,50 @@ test("without the app, app-only tools explain what to do instead", async () => {
   assert.match(text(e), /Pass filePath/);
   assert.ok(!(await call(noApp, "execute", { filePath: doc("solo.pen"), input: "fine" })).isError);
 });
+
+test("a window closed after the active document was cached: the next write goes headless", async () => {
+  await call(s, "get_app_state", {}); // caches the active document
+  setApp({ active: live, open: [live] }); // the user closes background.pen
+  const res = await call(s, "execute", { filePath: background, input: "after-close" });
+  assert.match(text(res), /ECHO .*background\.pen/, "headless");
+  assert.doesNotMatch(text(res), /APP-EXECUTE/);
+  await call(s, "close_file", { filePath: background });
+});
+
+test("a write without filePath after the active tab changed goes to the new tab", async () => {
+  await call(s, "get_app_state", {}); // caches live.pen as active
+  setApp({ active: background, open: [live, background] });
+  const res = await call(s, "execute", { input: "no-path" });
+  assert.match(text(res), new RegExp(`APP-EXECUTE doc=${background} input=no-path`));
+});
+
+test("a dashboard-opened document that was closed does not receive the write", async () => {
+  const dash = doc("dashboard.pen"); // active, but not in the window list
+  setApp({ active: dash, open: [live] });
+  const a = await agent(withApp({ PEN_MULTI_APP_STATE_TTL_MS: "60000" })); // its first lookup caches dash
+  assert.match(text(await call(a, "get_app_state", {})), /File: .*dashboard\.pen/);
+  setApp({ active: live, open: [live] }); // the user closes it
+  const res = await call(a, "execute", { filePath: dash, input: "w" });
+  assert.doesNotMatch(text(res), /APP-EXECUTE/, "not sent to the app, where it would land in live.pen");
+  await call(a, "close_file", { filePath: dash });
+});
+
+test("reads reuse the cached active document; concurrent calls share one request", async () => {
+  const fresh = await agent(withApp({ PEN_MULTI_APP_STATE_TTL_MS: "60000" }));
+  await call(fresh, "get_app_state", {});
+  const before = appState().stateCalls ?? 0;
+  await Promise.all([1, 2, 3, 4].map(() => call(fresh, "get_app_state", { filePath: live })));
+  assert.equal((appState().stateCalls ?? 0) - before, 4, "one proxied report per call, no extra active lookups");
+  const reads = appState().stateCalls ?? 0;
+  await Promise.all([1, 2, 3].map(() => call(fresh, "execute", { filePath: background, input: "r" })));
+  assert.equal(appState().stateCalls ?? 0, reads, "writes to a document in the window list need no active lookup");
+});
+
+test("the active document is re-read after the TTL", async () => {
+  const short = await agent(withApp({ PEN_MULTI_APP_STATE_TTL_MS: "200" }));
+  await call(short, "list_sessions", {});
+  setApp({ active: background, open: [live, background] });
+  await new Promise((r) => setTimeout(r, 300));
+  const list = JSON.parse(text(await call(short, "list_sessions", {})));
+  assert.equal(list.desktopApp.activeDocument, background);
+});

@@ -31,6 +31,7 @@ const firstCallFails = (handler) => async (args) => {
   return handler(args);
 };
 server.registerTool("get_app_state", { inputSchema: {} }, firstCallFails(async () => {
+  update({ stateCalls: (state().stateCalls ?? 0) + 1 });
   const { active } = state();
   return reply(active ? `## Canvas Editor\n\n- Currently active canvas editor: \`${active}\`\n- Selected nodes: \`sel1\`` : "No editor");
 }));

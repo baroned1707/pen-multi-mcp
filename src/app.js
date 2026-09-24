@@ -1,4 +1,4 @@
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -31,6 +31,7 @@ export const appConfig = {
   // Opens a document in the app WITHOUT bringing the app to the front (-g).
   openCommand: envJson("PEN_MULTI_APP_OPEN_CMD", ["open", "-g", "-a", "Pen"]),
   openTimeoutMs: Number(process.env.PEN_MULTI_APP_OPEN_TIMEOUT_MS ?? 90_000),
+  stateTtlMs: Number(process.env.PEN_MULTI_APP_STATE_TTL_MS ?? 2000),
   // Test hook: a JSON file listing the documents open in the app, instead of reading `ps`.
   docsFile: process.env.PEN_MULTI_APP_DOCS_FILE,
   // "0" skips macOS UI scripting (hiding Pen, moving the workbench window); used by tests.
@@ -57,6 +58,9 @@ export class AppBridge {
     this.client = null;
     this.connecting = null;
     this.saving = new Map(); // file -> queue of saves, so saves of one document never overlap
+    this.activeCache = null; // { file, at }
+    this.activeInFlight = null;
+    this.windowsInFlight = null;
   }
 
   /** Whether the desktop app is running and reachable right now. */
@@ -92,34 +96,56 @@ export class AppBridge {
       if (err instanceof McpError && err.code === ErrorCode.InternalError) {
         return { content: [{ type: "text", text: stripCode(err.message) }], isError: true };
       }
+      this.invalidate();
       this.#reset();
       throw new Error(`pen.dev app call ${name} failed: ${err.message}`);
     }
   }
 
-  /** Resolved path of the document in the app's active window, or null. */
-  async activeFile() {
+  /**
+   * Resolved path of the document in the app's active window, or null. Cached for
+   * stateTtlMs; pass { fresh: true } where a stale answer could misroute a write.
+   * Concurrent callers share one request.
+   */
+  async activeFile({ fresh = false } = {}) {
     if (!(await this.available())) return null;
-    const res = await this.call("get_app_state");
-    const match = ACTIVE.exec(textOf(res));
-    return match ? this.resolvePath(match[1]) : null;
+    const cached = this.activeCache;
+    if (!fresh && cached && Date.now() - cached.at < appConfig.stateTtlMs) return cached.file;
+    this.activeInFlight ??= (async () => {
+      const res = await this.call("get_app_state");
+      const match = ACTIVE.exec(textOf(res));
+      const file = match ? this.resolvePath(match[1]) : null;
+      this.activeCache = { file, at: Date.now() };
+      return file;
+    })().finally(() => (this.activeInFlight = null));
+    return this.activeInFlight;
+  }
+
+  /** Forget the cached active document (after errors, or when pen-multi changed the app's windows). */
+  invalidate() {
+    this.activeCache = null;
+  }
+
+  /** Documents with their own app window. Read fresh every time; concurrent callers share one read. */
+  async windowFiles() {
+    if (!(await this.available())) return new Set();
+    this.windowsInFlight ??= this.#readWindowFiles()
+      .then((files) => new Set(files.map((f) => this.resolvePath(f))))
+      .finally(() => (this.windowsInFlight = null));
+    return this.windowsInFlight;
   }
 
   /**
-   * Documents open in the app, active or not. The official server routes a filePath correctly
-   * to any open document; only unopened ones fall back to the active document.
-   * Each app window is a renderer process launched with its document's URI, so `ps` lists them.
+   * Documents open in the app: every window's document plus the active one (documents opened
+   * from the app's dashboard have no window entry). The official server routes a filePath
+   * correctly to any open document; only unopened ones fall back to the active document.
    */
-  async openFiles() {
-    if (!(await this.available())) return new Set();
-    const files = new Set();
-    const active = await this.activeFile().catch(() => null);
-    if (active) files.add(active);
-    for (const f of this.#windowFiles()) files.add(this.resolvePath(f));
-    return files;
+  async openFiles({ fresh = false } = {}) {
+    const [windows, active] = await Promise.all([this.windowFiles(), this.activeFile({ fresh }).catch(() => null)]);
+    return active ? new Set([...windows, active]) : windows;
   }
 
-  #windowFiles() {
+  async #readWindowFiles() {
     if (appConfig.docsFile) {
       try {
         const docs = JSON.parse(fs.readFileSync(appConfig.docsFile, "utf8"));
@@ -128,21 +154,19 @@ export class AppBridge {
         return [];
       }
     }
-    try {
-      const ps = execFileSync("ps", ["-axww", "-o", "command="], { encoding: "utf8", maxBuffer: 32 << 20 });
-      const files = [];
-      for (const line of ps.split("\n")) {
-        if (!line.includes("Pen Helper (Renderer)")) continue;
-        for (const [, uri] of line.matchAll(/"fileURI":"(file:\/\/[^"]+)"/g)) {
-          try {
-            files.push(fileURLToPath(uri));
-          } catch {}
-        }
+    const ps = await new Promise((resolve) =>
+      execFile("ps", ["-axww", "-o", "command="], { maxBuffer: 32 << 20 }, (err, out) => resolve(err ? "" : out)),
+    );
+    const files = [];
+    for (const line of ps.split("\n")) {
+      if (!line.includes("Pen Helper (Renderer)")) continue;
+      for (const [, uri] of line.matchAll(/"fileURI":"(file:\/\/[^"]+)"/g)) {
+        try {
+          files.push(fileURLToPath(uri));
+        } catch {}
       }
-      return files;
-    } catch {
-      return [];
     }
+    return files;
   }
 
   /**
@@ -150,7 +174,8 @@ export class AppBridge {
    * does not take focus from whatever the user is working in. Resolves once the app has it open.
    */
   async openInBackground(file) {
-    if ((await this.openFiles()).has(file)) return;
+    this.invalidate();
+    if ((await this.openFiles({ fresh: true })).has(file)) return;
     const [cmd, ...args] = appConfig.openCommand;
     await new Promise((resolve, reject) =>
       execFile(cmd, [...args, file], (err) =>
@@ -159,7 +184,7 @@ export class AppBridge {
     );
     const deadline = Date.now() + appConfig.openTimeoutMs;
     while (Date.now() < deadline) {
-      if ((await this.openFiles()).has(file)) return;
+      if ((await this.openFiles({ fresh: true })).has(file)) return;
       await sleep(500);
     }
     throw new Error(`The pen.dev app did not open ${file} within ${appConfig.openTimeoutMs / 1000}s.`);
@@ -229,12 +254,12 @@ export class AppBridge {
    * The user's document for calls without a filePath: the app's active one, or, while the
    * workbench holds that role, the one that was active before pen-multi opened the workbench.
    */
-  async userActiveFile() {
-    const active = await this.activeFile();
+  async userActiveFile({ fresh = false } = {}) {
+    const active = await this.activeFile({ fresh });
     if (active !== this.workbenchFile) return active;
     try {
       const remembered = fs.readFileSync(`${this.workbenchFile}.user-active`, "utf8").trim();
-      return (await this.openFiles()).has(remembered) ? remembered : null;
+      return (await this.windowFiles()).has(remembered) ? remembered : null;
     } catch {
       return null;
     }
