@@ -8,6 +8,14 @@ export const snippets = {
   topLevelIds: () => `Print("IDS", JSON.stringify(Get((n, c) => { c.skipChildren(); return n.id; })))`,
   exportNodes: (ids) => `Print("NODES", JSON.stringify(${JSON.stringify(ids)}.map((id) => Get(id))))`,
   deleteNodes: (ids) => `${JSON.stringify(ids)}.forEach((id) => Delete(id))`,
+  // A get_app_state-like summary of one document, for app documents that are not the active one
+  // (the app's own get_app_state only ever describes the active document).
+  documentState: () => `const top = [];
+Get((n, c) => { c.skipChildren(); top.push("\`" + n.id + "\` (" + n.type + "): " + (n.name ?? "")); return undefined; });
+const comps = [];
+Get((n, c) => { if (n.type === "ref") c.skipChildren(); if (n.reusable) comps.push("\`" + n.id + "\`: " + n.name); return undefined; });
+const list = (items) => items.length ? items.slice(0, 10).join(", ") + (items.length > 10 ? ", ... +" + (items.length - 10) + " others" : "") : "none";
+Print("# Document State\\n\\n## Canvas Editor\\n\\n- Top-level nodes: " + list(top) + "\\n- Reusable components: " + list(comps));`,
   // Rebuilds each subtree node by node, placing every root in free space so nothing overlaps.
   insertNodes: (nodes) => `const ins = (parent, node) => {
   const { children, id, ...props } = node;

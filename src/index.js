@@ -216,7 +216,12 @@ tool(
   { filePath: optionalFilePath },
   async ({ filePath: f }) => {
     const target = await route(f);
-    if (target.mode === "app") return fromApp(await app.call("get_app_state"), target);
+    if (target.mode === "app") {
+      // The app's get_app_state has no filePath: it always describes the active document.
+      if ((await app.activeFile().catch(() => null)) === target.file) return fromApp(await app.call("get_app_state"), target);
+      const res = await app.call("execute", { filePath: target.file, input: snippets.documentState() });
+      return fromApp(res, target, "Selection and browser state are only reported for the app's active document; this one is open in a background window.");
+    }
     return pool.use(target.file, async (session, warnings) => {
       const res = await session.shell.call("get_app_state");
       return res.error ? fail(res.error, target.file) : ok(res.text, warnings, target.file);

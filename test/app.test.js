@@ -76,6 +76,21 @@ test("a document open in a background window goes to the app too, not to a headl
   assert.equal(appState().active, live, "the user's active window is left alone");
 });
 
+test("get_app_state on a document open in a background window describes that document, not the active one", async () => {
+  const res = await call(s, "get_app_state", { filePath: background });
+  assert.ok(!res.isError, text(res));
+  assert.match(text(res), /File: .*background\.pen/);
+  assert.match(text(res), new RegExp(`APP-EXECUTE doc=${background}`), "read from the background document itself");
+  assert.doesNotMatch(text(res), /Currently active canvas editor/, "not the active document's state");
+  assert.match(text(res), /only reported for the app's active document/);
+});
+
+test("get_app_state on the active document keeps the app's own report, selection included", async () => {
+  const res = await call(s, "get_app_state", { filePath: live });
+  assert.match(text(res), new RegExp(`Currently active canvas editor: \`${live}\``));
+  assert.match(text(res), /Selected nodes/);
+});
+
 test("omitting filePath targets the app's active document, like the official server", async () => {
   assert.match(text(await call(s, "execute", { input: "y" })), new RegExp(`APP-EXECUTE doc=${live} input=y`));
   assert.match(text(await call(s, "get_app_state", {})), /Selected nodes/);

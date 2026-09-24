@@ -14,11 +14,12 @@ const stateFile = path.join(root, "app-state.json");
 const doc = (name) => path.join(root, name);
 const benchDir = path.join(root, "bench");
 const workbench = path.join(benchDir, "workbench.pen");
-const userDoc = doc("user.pen"); // open in the (fake) app
+const userDoc = doc("user.pen"); // open in the (fake) app, active
+const bgDoc = doc("background.pen"); // open in the (fake) app, in a background window
 
 let s;
 before(async () => {
-  fs.writeFileSync(stateFile, JSON.stringify({ active: userDoc, open: [userDoc], page: "" }));
+  fs.writeFileSync(stateFile, JSON.stringify({ active: userDoc, open: [userDoc, bgDoc], page: "" }));
   s = await connect({
     home: path.join(root, "home"),
     cwd: root,
@@ -74,4 +75,17 @@ test("import-to-canvas into a document open in the app lands in that document", 
   assert.ok(!res.isError, text(res));
   assert.match(text(res), /File: .*user\.pen \(in the pen\.dev desktop app\)/);
   assert.deepEqual(await treeOf(userDoc), ["Imported live.example", "  Heading", "  Row", "    Cell"]);
+});
+
+test("get_app_state describes a background document from the document itself", async () => {
+  const made = await call(s, "execute", {
+    filePath: bgDoc,
+    input: 'c=Insert(document,{type:"frame",name:"C/Card",reusable:true,width:10,height:10});Insert(document,{type:"frame",name:"Screen A",width:10,height:10})',
+  });
+  assert.ok(!made.isError, text(made));
+  const res = await call(s, "get_app_state", { filePath: bgDoc });
+  assert.ok(!res.isError, text(res));
+  assert.match(text(res), /Top-level nodes: .*C\/Card.*Screen A/);
+  assert.match(text(res), /Reusable components: `\w+`: C\/Card/);
+  assert.doesNotMatch(text(res), /Currently active canvas editor/);
 });
