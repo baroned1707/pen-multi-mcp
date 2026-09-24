@@ -10,7 +10,8 @@ export async function connect({ home, cwd, env = {} }) {
     command: process.execPath,
     args: [serverPath],
     cwd,
-    env: { ...process.env, PEN_MULTI_HOME: home, ...env },
+    // The desktop app bridge is off unless a test opts in, so tests never touch the user's app.
+    env: { ...process.env, PEN_MULTI_HOME: home, PEN_MULTI_APP: "0", ...env },
     stderr: "ignore",
   });
   const client = new Client({ name: "test", version: "0" });

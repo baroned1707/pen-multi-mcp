@@ -1,13 +1,34 @@
 # pen-multi-mcp
 
-An MCP server for editing pen.dev `.pen` files **without the pen.dev desktop app**, built for **many agents working on many projects at the same time**, with **file versions** kept apart.
+An MCP server for pen.dev `.pen` files that covers **every tool of the official pen.dev MCP server**, works **with or without the desktop app**, and is built for **many agents working on many projects at the same time**.
 
 The official `pencil` MCP server forwards every call to the single running desktop app. That means:
 
 - the app must be open, with the target document open in a window;
 - a `filePath` that is not open in the app silently falls back to the app's *active* document, so edits can land in the wrong project.
 
-`pen-multi-mcp` drives the official [`@pen.dev/cli`](https://www.npmjs.com/package/@pen.dev/cli) in headless mode instead. Each `.pen` file gets its own `pen interactive` process, keyed by its absolute path, so files cannot be mixed up and nothing needs a GUI. The CLI is used as-is: it is not modified, patched or bundled.
+`pen-multi-mcp` has two backends and picks one per call:
+
+| Target | Backend |
+|---|---|
+| The **active tab** of the running pen.dev app, or no `filePath` | The app, through its own MCP server binary, run as a child. Edits are live on the user's canvas. |
+| Any other `.pen` file | Its own headless [`@pen.dev/cli`](https://www.npmjs.com/package/@pen.dev/cli) `pen interactive` process. No app needed. |
+
+The active tab is re-checked before every app call, so a file is never silently sent to another document. The CLI and the app's server are used as-is: not modified, patched or bundled.
+
+## Parity with the official server
+
+| Official tool | pen-multi |
+|---|---|
+| `read_skill` | Same; cached on disk for all agents |
+| `get_style({ name, params })` | Same |
+| `get_app_state()` | Same with no `filePath` (app state, selection, browser); with `filePath`, the state of that file |
+| `execute` | Same; `filePath` optional as in the official server |
+| `browser` | Proxied to the app, on its active document (the CLI cannot run the integrated browser) |
+| `spawn_agents` | Proxied to the app, on its active document |
+| — | Extra: `open_file`, `fork_version`, `save`, `close_file`, `list_sessions` |
+
+`browser` and `spawn_agents` need the desktop app with the target document as its active tab; without it they return an error saying so.
 
 ## Setup
 
@@ -26,8 +47,9 @@ It can run next to the official `pencil` server.
 | Tool | Purpose |
 |---|---|
 | `read_skill`, `get_style` | Same as the official server (cached; no design file needed) |
-| `execute` | Run a snippet against `filePath`; opens the file on demand; supports `editId` + `edits` retries |
-| `get_app_state` | Document state of one file |
+| `execute` | Run a snippet against `filePath` (or the app's active document); supports `editId` + `edits` retries |
+| `get_app_state` | Document state of one file, or of the app |
+| `browser`, `spawn_agents` | App features, on the app's active document |
 | `open_file` | Open a file explicitly, or create a new version from `sourcePath` |
 | `fork_version` | Copy a file to a new path to work on a separate version |
 | `save` | Write to disk (only needed with autosave off) |
@@ -53,7 +75,7 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 - **Paths** are resolved through symlinks, so `/tmp/x.pen` and `/private/tmp/x.pen` share one editor and one lock.
 - **Idle files** close after 15 minutes. Each open file costs roughly 500–650 MB of RAM.
 - **Snippet run time**: the CLI's sandbox interrupts a snippet that runs for too long (`InternalError: interrupted`); split long work into several `execute` calls.
-- **Desktop app**: the server warns when a file is also open in the desktop app, and when a source file is 0 bytes on disk (its content may exist only unsaved in the app). Do not edit the same file in both places; they overwrite each other.
+- **Desktop app**: a file that is the app's active tab is edited in the app, never headlessly. If a file is already open headlessly when it becomes the active tab, calls are refused until one side lets go, instead of the two editors overwriting each other. The server also warns when a headless file is open in a background tab of the app, and when a source file is 0 bytes on disk (its content may exist only unsaved in the app).
 - `Export()` relative paths resolve next to the `.pen` file. Generated images are written to `images/` next to it.
 
 | Env var | Default | |
@@ -67,10 +89,14 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 | `PEN_MULTI_CALL_TIMEOUT_MS` | `300000` | Per-call timeout |
 | `PEN_MULTI_HOME` | `~/.pen-multi` | Locks and the shared cache |
 | `PEN_CLI_PATH` | bundled dependency | Path to another `@pen.dev/cli` `dist/index.mjs` |
+| `PEN_MULTI_APP` | `1` | `0` never uses the desktop app |
+| `PEN_MULTI_APP_SERVER` | the app's bundled `mcp-server` | Path to the app's MCP server binary |
+| `PEN_MULTI_APP_AGENT` | `claudeCodeCLI` | Agent name reported to the app |
 
 ## Limitations
 
-- No `browser` tool (desktop-only) and no live view: open the file in the app afterwards to look at it.
+- Headless files have no live view: open them in the app afterwards to look at them.
+- App-routed edits are saved to disk when the document is saved in the app, not by pen-multi.
 - Responses are read from the CLI's interactive shell output, so a CLI update could change the format. The CLI version is pinned in `package.json`; run `npm test` after bumping it.
 - `Generate(...)`, `get_style` and login go through pen.dev's backend like the app does.
 
@@ -78,5 +104,5 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 
 ```bash
 npm test   # needs a logged-in CLI; ~1 min normally, several on a loaded machine
-node --test test/pool.test.js test/shell.test.js   # fake-CLI and unit tests only, no login needed
+node --test test/pool.test.js test/app.test.js test/shell.test.js   # fake CLI/app and unit tests, no login needed
 ```
