@@ -161,7 +161,8 @@ class Session {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class SessionPool {
-  constructor() {
+  constructor({ saver } = {}) {
+    this.saver = saver; // background saves to flush before a session closes
     this.sessions = new Map();
     this.pending = new Map();
     // file -> number of tool calls using it. Counted from the moment a call arrives, before its
@@ -261,6 +262,7 @@ export class SessionPool {
   async close(file, { save = true } = {}) {
     const session = this.sessions.get(file);
     if (!session) return false;
+    if (save) await this.saver?.flush(file).catch(() => {}); // a failed save is kept by the saver
     this.sessions.delete(file);
     try {
       if (save && session.dirty) await this.save(session);
