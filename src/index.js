@@ -8,11 +8,18 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppBridge, AppUnavailableError, textOf } from "./app.js";
 import { toContent } from "./format.js";
+import { SaveScheduler } from "./saver.js";
+import { Timings } from "./timing.js";
 import { carryImages, readPrinted, snippets } from "./transfer.js";
 import { FileLock, SessionPool, config, normalize, withMachineLock } from "./pool.js";
 import { cliVersion } from "./shell.js";
 
-const pool = new SessionPool();
+const timings = new Timings();
+const saver = new SaveScheduler({
+  delayMs: Number(process.env.PEN_MULTI_SAVE_DELAY_MS ?? 1500),
+  onError: (file, err) => process.stderr.write(`pen-multi: background save of ${file} failed: ${err.message}\n`),
+});
+const pool = new SessionPool({ saver });
 const app = new AppBridge(normalize);
 
 const INSTRUCTIONS = `pen.dev editor for .pen design files (web/mobile apps and websites): read, generate, and validate designs. Covers every tool of the official pen.dev MCP server, and works with or without the pen.dev desktop app.
@@ -25,7 +32,7 @@ Where a call runs:
 - No filePath means the app's active document, like the official server.
 - pen-multi never opens, focuses or raises the user's windows. browser runs in its own workbench window kept off screen; import-to-canvas and screenshot-to-canvas then move the result into filePath, headless or in the app. Agents take turns on the browser; pass url with any browser action to load the page and act on it in one step.
 - spawn_agents runs in the app, so it needs filePath open there; otherwise use your own subagents on the same filePath.
-- ${config.autosave ? "Every successful change is saved to disk automatically, in the app too (this also saves the user's own unsaved edits in that document)." : "Changes are not saved automatically: call save for headless files; the user saves app documents."}
+- ${config.autosave ? "Every successful change is saved to disk automatically, in the background right after the call returns (in the app too, which also saves the user's own unsaved edits in that document). Call save before reading a .pen file from disk or committing it: it waits for the background save." : "Changes are not saved automatically: call save."}
 - Each response starts with "File: <path>" and says where it ran. A file is never silently routed to another document.
 
 Many agents and projects:
@@ -48,6 +55,17 @@ const ok = (text, warnings = [], file) => ({
     [file && `File: ${file}`, ...warnings.map((w) => `WARNING: ${w}`), text].filter(Boolean).join("\n\n"),
   ),
 });
+const SAVING_NOTE = "Saving to disk in the background; call save before reading or committing this file.";
+const NOT_SAVING_NOTE = "Not saved to disk (autosave is off): call save.";
+const saveWarning = (file) => (saver.error(file) ? [`the last background save of this file failed: ${saver.error(file)}`] : []);
+
+/** Schedules a background save of a headless session. */
+const scheduleHeadlessSave = (session) =>
+  saver.markDirty(session.file, () => timings.time("save", () => (session.dirty ? pool.save(session) : undefined)));
+
+/** Schedules a background save of an app document. */
+const scheduleAppSave = (file) => saver.markDirty(file, () => timings.time("save", () => app.save(file)));
+
 const fail = (text, file) => ({ content: [{ type: "text", text: file ? `File: ${file}\n\n${text}` : text }], isError: true });
 
 const APP_ONLY_HELP = {
@@ -65,17 +83,14 @@ const fromApp = (res, target, note) => ({
   ],
 });
 
-/** Runs a document-changing app call, then saves the document to disk when autosave is on. */
+/** Runs a document-changing app call, then schedules a background save when autosave is on. */
 async function appWrite(target, name, args, send = (t, a) => app.call(name, { filePath: t.file, ...a })) {
-  const res = await send(target, args);
+  const warnings = saveWarning(target.file);
+  const res = await timings.time("call", () => send(target, args));
   if (res.isError) return fromApp(res, target);
-  if (!config.autosave) return fromApp(res, target, "Not saved to disk (autosave is off): save it in the pen.dev app.");
-  try {
-    await app.save(target.file);
-    return fromApp(res, target, "Saved to disk.");
-  } catch (err) {
-    return fromApp(res, target, `WARNING: the change is in the app but not on disk (${err.message}). Save it in the pen.dev app (Cmd+S).`);
-  }
+  if (!config.autosave) return fromApp(res, target, NOT_SAVING_NOTE);
+  scheduleAppSave(target.file);
+  return fromApp(res, target, [...warnings.map((w) => `WARNING: ${w}`), SAVING_NOTE].join("\n"));
 }
 
 const heldByOtherAgent = (file) => {
@@ -92,7 +107,9 @@ const heldByOtherAgent = (file) => {
  * it open (or has just opened it in the background): the official server silently falls back to
  * the active document for files it does not have open.
  */
-async function route(f, { needsApp = false, tool: toolName, write = false } = {}) {
+const route = (f, opts) => timings.time("route", () => routeUntimed(f, opts));
+
+async function routeUntimed(f, { needsApp = false, tool: toolName, write = false } = {}) {
   const appUp = await app.available();
   const unavailable = (msg) => new AppUnavailableError([msg, APP_ONLY_HELP[toolName]].filter(Boolean).join(" "));
   if (!f) {
@@ -262,11 +279,12 @@ tool(
     if (target.mode === "app") return appWrite(target, "execute", payload);
     const file = target.file;
     return pool.use(file, async (session, warnings) => {
-      const res = await session.shell.call("execute", payload);
+      const res = await timings.time("call", () => session.shell.call("execute", payload));
       if (res.error) return fail(res.error, file);
       session.dirty = true;
-      if (config.autosave) await pool.save(session);
-      return ok(res.text, warnings, file);
+      const notes = [...warnings, ...saveWarning(file)];
+      if (config.autosave) scheduleHeadlessSave(session);
+      return ok(`${res.text}\n\n${config.autosave ? SAVING_NOTE : NOT_SAVING_NOTE}`, notes, file);
     });
   },
 );
@@ -351,8 +369,8 @@ async function place(dest, nodes, what) {
     const res = await session.shell.call("execute", { input });
     if (res.error) return fail(res.error, dest.file);
     session.dirty = true;
-    if (config.autosave) await pool.save(session);
-    return ok(describe(res.text), warnings, dest.file);
+    if (config.autosave) scheduleHeadlessSave(session);
+    return ok(`${describe(res.text)}\n\n${config.autosave ? SAVING_NOTE : NOT_SAVING_NOTE}`, warnings, dest.file);
   });
 }
 
@@ -416,12 +434,16 @@ tool(
 
 tool(
   "save",
-  "Write a .pen document to disk, whether it is open headlessly or in the pen.dev app. Only needed when autosave is off.",
+  "Write a .pen document to disk now, whether it is open headlessly or in the pen.dev app, waiting for any background save. Call it before reading or committing a .pen file.",
   { filePath },
   async ({ filePath: f }) => {
     const file = normalize(f);
-    if (pool.sessions.has(file)) return pool.use(file, async (session) => ok(await pool.save(session), [], file));
-    if ((await app.openFiles()).has(file)) {
+    if (pool.sessions.has(file)) {
+      await saver.flush(file).catch(() => {});
+      return pool.use(file, async (session) => ok(await pool.save(session), saveWarning(file), file));
+    }
+    if ((await app.openFiles({ fresh: true })).has(file)) {
+      await saver.flush(file).catch(() => {});
       await app.save(file);
       return ok(`Saved ${file} from the pen.dev app.`, [], file);
     }
@@ -441,6 +463,7 @@ tool(
     const src = normalize(f);
     const dst = normalize(newPath);
     if (src === dst) throw new Error("newPath must differ from filePath.");
+    await saver.flush(src).catch(() => {});
     if (pool.sessions.get(src)?.dirty) await pool.use(src, (s) => pool.save(s));
     if (!fs.existsSync(src)) throw new Error(`Source file not found: ${src}`);
     if (pool.sessions.has(dst)) throw new Error(`${dst} is open; close it first.`);
@@ -489,7 +512,13 @@ tool(
     const desktopApp = (await app.available())
       ? { running: true, activeDocument: await app.activeFile().catch(() => null), openDocuments: [...(await app.openFiles())] }
       : { running: false };
-    return ok(JSON.stringify({ sessions, machineWide, desktopApp, limits }, null, 2));
+    return ok(
+      JSON.stringify(
+        { sessions, machineWide, desktopApp, limits, timings: timings.summary(), pendingSaves: saver.pending(), saveErrors: saver.errors() },
+        null,
+        2,
+      ),
+    );
   },
 );
 
@@ -497,6 +526,7 @@ let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  await saver.flushAll();
   await Promise.allSettled([pool.closeAll(), app.close()]);
   fs.rmSync(utilityFile, { force: true });
   process.exit(0);

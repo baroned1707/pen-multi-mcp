@@ -59,7 +59,8 @@ test("the app's active document is edited in the app and saved to disk", async (
   assert.ok(!res.isError, text(res));
   assert.match(text(res), /File: .*live\.pen \(in the pen\.dev desktop app\)/);
   assert.match(text(res), new RegExp(`APP-EXECUTE doc=${live} input=x`));
-  assert.match(text(res), /Saved to disk/);
+  assert.match(text(res), /Saving to disk in the background/);
+  await call(s, "save", { filePath: live });
   assert.ok(mtime(live) > before, "written to disk");
 });
 
@@ -182,13 +183,6 @@ test("an agent never mistakes the workbench for the user's document", async () =
   assert.match(text(res), /workbench, not a design/);
 });
 
-test("a save the app did not perform is reported, not claimed", async () => {
-  const quiet = await agent(withApp({ FAKE_SAVE_NOOP: "1" }));
-  const res = await call(quiet, "execute", { filePath: live, input: "unsaved" });
-  assert.match(text(res), /not on disk/);
-  assert.doesNotMatch(text(res), /Saved to disk/);
-});
-
 test("get_style passes params through", async () => {
   const res = await call(s, "get_style", { name: "Aerial Gravitas", params: { accent: "blue" } });
   assert.match(text(res), /get_style\(\{"name":"Aerial Gravitas","params":\{"accent":"blue"\}\}\)/);
@@ -255,4 +249,33 @@ test("the active document is re-read after the TTL", async () => {
   await new Promise((r) => setTimeout(r, 300));
   const list = JSON.parse(text(await call(short, "list_sessions", {})));
   assert.equal(list.desktopApp.activeDocument, background);
+});
+
+test("writes respond before saving; a burst saves once; save flushes and waits", async () => {
+  const quick = await agent(withApp({ PEN_MULTI_SAVE_DELAY_MS: "5000" })); // longer than the burst
+  const before = mtime(live);
+  for (let i = 0; i < 5; i++) {
+    const res = await call(quick, "execute", { filePath: live, input: `burst-${i}` });
+    assert.match(text(res), /Saving to disk in the background/);
+  }
+  assert.equal(mtime(live), before, "not saved before responding");
+  const saved = await call(quick, "save", { filePath: live });
+  assert.ok(!saved.isError, text(saved));
+  assert.ok(mtime(live) > before, "save flushed it");
+});
+
+test("a failed background save is reported on the next call for that file and in list_sessions", async () => {
+  const broken = await agent(withApp({ PEN_MULTI_SAVE_DELAY_MS: "50", FAKE_SAVE_NOOP: "1" }));
+  await call(broken, "execute", { filePath: live, input: "unsaved" });
+  await new Promise((r) => setTimeout(r, 2500)); // the fake CLI save runs and fails the mtime check
+  const next = await call(broken, "execute", { filePath: live, input: "next" });
+  assert.match(text(next), /WARNING: .*not.*disk/i);
+  const list = JSON.parse(text(await call(broken, "list_sessions", {})));
+  assert.ok(list.saveErrors[live], JSON.stringify(list.saveErrors));
+});
+
+test("list_sessions reports timings", async () => {
+  await call(s, "execute", { filePath: live, input: "t" });
+  const list = JSON.parse(text(await call(s, "list_sessions", {})));
+  assert.ok(list.timings.route && list.timings.call, JSON.stringify(list.timings));
 });

@@ -95,6 +95,7 @@ test("an agent that dies does not block others from its files", async () => {
   const doomed = await agent({ cwd: project("doomed") });
   const file = path.join(root, "doomed", "d.pen");
   assert.ok(!(await call(doomed, "execute", { filePath: file, input: rect("before-crash") })).isError);
+  assert.ok(!(await call(doomed, "save", { filePath: file })).isError, "saved before the crash");
   process.kill(doomed.pid, "SIGKILL");
   await new Promise((r) => setTimeout(r, 1500));
 

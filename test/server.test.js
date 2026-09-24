@@ -33,6 +33,7 @@ test("edits two files in parallel without mixing them up, and autosaves", async 
   ]);
   assert.match(text(ca), /COUNT 1 \["OnlyInA"\]/);
   assert.match(text(cb), /COUNT 2 \["OnlyInB","AlsoInB"\]/);
+  await Promise.all([fileA, fileB].map((filePath) => call(client, "save", { filePath })));
   assert.ok(fs.statSync(fileA).size > 0, "a.pen written to disk");
   assert.ok(fs.statSync(fileB).size > 0, "b.pen written to disk");
 });
