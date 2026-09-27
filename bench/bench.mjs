@@ -58,7 +58,7 @@ const [par, perAgent] = await t(() => Promise.all(Object.entries(files).map(asyn
   for (let j = 0; j < 10; j++) lat.push((await t(() => call(a, j % 2 ? "execute" : "execute", { filePath: f, input: j % 2 ? `Print(Get((n,c)=>{c.skipChildren();return 1}).length)` : `Insert(document,{type:"rectangle",name:"p${j}",x:-9500,y:${j * 50},width:40,height:40})` }).then(must)))[0]);
   return { file: k, first: ms(lat[0]), medianRest: ms(med(lat.slice(1))), max: ms(Math.max(...lat)) };
 })));
-console.log(`\n## 4 agents × 4 files in parallel, 10 calls each (5 write + 5 read): wall ${ms(par)}`);
+console.log(`\n## ${agents.length} agents × ${agents.length} files in parallel, 10 calls each (5 write + 5 read): wall ${ms(par)}`);
 console.table(perAgent);
 
 // 3. Two agents on the same file: the second must fail fast with a clear owner message.
