@@ -60,9 +60,18 @@ Compared design nodes: visible, not fully clipped, non-zero, not note/prompt/con
 
 1. **Marker** (confidence high): `data-pen` (web), `testID`/`nativeID` starting with `pen:` (probe), resource-id / content-desc / accessibility id starting with `pen:` (native); the value (prefix removed) is a node id, a full address (`Home · light/Header/Title`), an address suffix (`Header/Title`), or a unique name.
 2. **Text** (medium): normalized text (NFKC, collapsed whitespace, case-insensitive) equal on both sides; several candidates → nearest by position.
-3. **Geometry** (low): remaining boxes/instances/sections to unmatched UI elements with IoU ≥ 0.6, best first.
+3. **Content** (medium): a container whose texts were matched maps to the UI element enclosing them (their common ancestor whose area is closest, within ×0.5–2), innermost containers first.
+4. **Geometry** (low): remaining boxes/instances/sections to unmatched UI elements with IoU ≥ 0.6, best first.
 
-UI coordinates are scaled by `frame.w / viewport.w` before any geometry.
+UI coordinates are not scaled: CSS px, dp and pt are the design's unit, so fixed sizes (font size, padding) stay comparable. When the device is wider or narrower than the frame, an element passes horizontally if its left, right or center anchor is within tolerance, and its width if both margins are (a stretched fill element).
+
+Refinements from running against real apps (trading-agent web, an Android emulator, an Expo SDK 57 app):
+- Positions are relative to the nearest matched ancestor, so a moved section is one finding, not one per child.
+- A missing container reports its missing contents in one finding; an unpainted grouping frame whose contents are all present is low ("no element groups …").
+- More than 8 extra texts are summarized in one finding (usually a wrong route/state or a whole old screen).
+- Phone chrome drawn in mockups (status bar, home indicator) is skipped, and so is the device's own status bar band (probe inset) in the pixel comparison.
+- Pixel regions already explained by an element finding (on the design node, or where the UI moved it) are counted, not listed.
+- pen-probe boxes from edge-to-edge windows (negative root y) are shifted to screen coordinates; Fabric views without a public instance are measured through nativeFabricUIManager / UIManager.
 
 ## Findings
 

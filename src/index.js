@@ -14,6 +14,7 @@ import { Timings } from "./timing.js";
 import { carryImages, readPrinted, snippets } from "./transfer.js";
 import { FileLock, SessionPool, config, normalize, withMachineLock } from "./pool.js";
 import { prewarm } from "./prewarm.js";
+import { registerVerifyTools } from "./verify/tools.js";
 import { cliVersion } from "./shell.js";
 import { registerDesignTools } from "./design/tools.js";
 
@@ -47,6 +48,8 @@ Implementing or refactoring UI from a design (port mode):
 - Before editing code: call overview, then inspect the target screen (save it with savePath and re-read that file after context compaction). List the structural differences between the design and the current UI (shell, navigation, section order, missing or extra elements) and work through that list.
 - If project rules conflict with matching the design (e.g. "preserve the theme"), ask the user once which wins and follow the answer.
 - Never port from screenshots or from memory: read the design as data with inspect. Screenshots are for a human sanity check, not for measurements.
+- While implementing, mark elements with the layer address inspect prints: data-pen="Header/Title" on web, testID="pen:Header/Title" in React Native (add probe/react-native/PenProbe.js to the app root once).
+- A port is done only when verify reports MATCH for every implemented screen × width × theme: run it against the running app (web URL, pen-probe, native device, or a screenshot), fix the high findings first (missing, extra, order), then the rest, and re-run. Do not report a screen as done from a screenshot.
 
 Many agents and projects:
 - Relative filePaths resolve against this agent's working directory (${process.cwd()}).
@@ -54,7 +57,7 @@ Many agents and projects:
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "0.7.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "0.8.0" }, { instructions: INSTRUCTIONS });
 
 const filePath = z
   .string()
@@ -557,6 +560,7 @@ tool(
 );
 
 designTools = registerDesignTools({ tool, z, route, app, pool, saver, timings, ok, fail, fromApp, textOf, optionalFilePath });
+registerVerifyTools({ tool, z, route, design: designTools, withMachineLock, optionalFilePath, ok });
 
 let shuttingDown = false;
 async function shutdown() {

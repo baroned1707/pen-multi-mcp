@@ -58,6 +58,7 @@ It can run next to the official `pencil` server.
 |---|---|
 | `read_skill`, `get_style` | Same as the official server (cached; no design file needed) |
 | `overview`, `inspect` | Design context: the whole document, and one screen as data (see below) |
+| `verify`, `capture`, `contact_sheet` | Check the running implementation against the design on web, React Native, native Android/iOS or a screenshot (see below) |
 | `execute` | Run a snippet against `filePath` (or the app's active document); supports `editId` + `edits` retries |
 | `get_app_state` | Document state of one file, or of the app |
 | `browser`, `spawn_agents` | App features; see above |
@@ -83,6 +84,34 @@ Screen names are parsed across conventions seen in practice (`S3 · Trang tin ·
 The server instructions add a **port mode**: the design is the source of truth; "update the existing component" means make it match; read with `inspect`, never from screenshots or memory; list structural differences (shell, navigation, section order, missing/extra elements) before editing; ask once when project rules conflict.
 
 `execute` responses carry `HINT:` lines for failures agents otherwise miss: a read that printed nothing, `console.log`, `await`, `TakeScreenshot` with a non-array, and interrupted snippets. Read-only snippets never mark a file dirty or trigger a save.
+
+## Code ↔ design check: `verify`, `capture`, `contact_sheet`
+
+`verify` compares a design screen with the running UI and returns the differences as text, so an agent cannot call a port done while the old UI is still on screen:
+
+- **Structure** (high): design nodes missing from the UI (a missing container lists what is inside it), UI text that is not in the design (old UI left behind), section order.
+- **Layout / Color / Typography** (medium, low): size, position (relative to the matched parent, so a moved section is one finding, not one per child), fill and text color (ΔE), font size and weight, line height, radius, borders, letter case.
+- **Visual**: pixel regions that differ where no element finding explains them, named after the design nodes there.
+
+The verdict is `MATCH` when there is nothing high or medium. The report JSON, the capture and a contact sheet (design | UI | UI with numbered findings) are written to `design-verify/` in the agent's project; add it to `.gitignore`.
+
+```js
+verify({ filePath: "app.pen", target: "Checkout", width: 390, theme: "dark",
+         source: { kind: "web", url: "http://localhost:5173/checkout", steps: [{ click: "text=Cart" }] } })
+```
+
+| `source.kind` | For | How | Compares |
+|---|---|---|---|
+| `web` | any web app | headless Chromium via `playwright-core` (never a window): DOM + computed style, full-page screenshot; viewport = the design frame's width, `prefers-color-scheme` from the theme | everything |
+| `probe` | React Native / Expo dev builds | [`probe/react-native/PenProbe.js`](probe/react-native/README.md) in the app reads the view tree and styles; screenshot from `simctl` / `adb` | everything |
+| `native` | any Android / iOS app | `adb uiautomator dump` or `maestro hierarchy`, colors sampled from the screenshot | boxes, text, colors |
+| `image` | anything else | a PNG you captured | pixel regions only |
+
+Elements are paired with design nodes by **marker** first — `data-pen="Header/Title"` on web, `testID="pen:Header/Title"` in React Native, a `pen:` resource-id / accessibility id natively; the value is a node id, a layer address from `inspect`, an address suffix, or a unique layer name, and repeated rows share one marker — then by **equal text**, then containers by the texts they hold, then by box overlap. Without markers the report says so and lists what was matched only by position. Phone chrome drawn into mockups (status bar, home indicator) is skipped. Tolerances default to 4 px position/size (5 % of large boxes), ΔE 10, 1 px font size, 100 font weight, and can be overridden per call.
+
+`capture` stores a snapshot on its own (to verify again later with `snapshot`, or to look at what the UI renders); `contact_sheet` puts several verify reports into one image and returns it inline.
+
+The browser is Playwright's Chromium if installed (`npx playwright install chromium`), else Google Chrome, else `PEN_MULTI_BROWSER`. `native` needs `adb` or `maestro` (+ Xcode's `simctl`); `PEN_MULTI_ADB`, `PEN_MULTI_XCRUN` and `PEN_MULTI_MAESTRO` point at other binaries. pen-multi never starts the app, dev server or simulator: pass a running URL or device.
 
 ## Many agents, many projects
 
@@ -122,6 +151,10 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 | `PEN_MULTI_PREWARM` | `1` | `0` never starts an editor ahead of use |
 | `PEN_MULTI_PREWARM_MINUTES` | `3` | How long an unused pre-warmed editor stays open |
 | `PEN_MULTI_PREWARM_DELAY_MS` | `2000` | Delay after server start before pre-warming |
+| `PEN_MULTI_BROWSER` | Playwright's Chromium, then Chrome | Browser executable for `verify`/`capture` web sources |
+| `PEN_MULTI_PROBE_PORT` | `7357` | Port pen-probe polls during a capture |
+| `PEN_MULTI_PROBE_LAN` | `0` | `1` listens on the LAN during probe captures (devices on Wi-Fi) instead of localhost only |
+| `PEN_MULTI_ADB`, `PEN_MULTI_XCRUN`, `PEN_MULTI_MAESTRO` | from `PATH` | Tools for `native` / `probe` sources |
 | `PEN_MULTI_HOME` | `~/.pen-multi` | Locks and the shared cache |
 | `PEN_CLI_PATH` | bundled dependency | Path to another `@pen.dev/cli` `dist/index.mjs` |
 | `PEN_MULTI_APP` | `1` | `0` never uses the desktop app |
