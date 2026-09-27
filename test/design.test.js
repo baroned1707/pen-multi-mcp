@@ -175,3 +175,44 @@ test("savePath refuses non-json paths and files that are not specs", async () =>
   assert.match(text(clobber), /not an inspect spec; refusing/);
   assert.equal(fs.readFileSync(path.join(dir, "package.json"), "utf8"), "{}");
 });
+
+test("json output is capped inline; the saved spec is complete", async () => {
+  const t = text(await call(client, "inspect", { filePath: file, target: "Checkout · light", format: "json", maxLines: 20, savePath: path.join(dir, "spec", "full.json") }));
+  const body = JSON.parse(t.slice(t.indexOf("{")));
+  assert.equal(body.nodes.length, 20);
+  assert.ok(body.truncatedNodes > 0);
+  assert.match(t, /nodes are not included inline: pass savePath/);
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, "spec", "full.json"), "utf8"));
+  assert.equal(saved.nodes.length, 20 + body.truncatedNodes);
+});
+
+test("html-ref goes to its own folder and never replaces a file it did not write", async () => {
+  const res = text(await call(client, "inspect", { filePath: file, target: "Checkout · light", format: "html-ref" }));
+  assert.match(res, /design-ref\/Checkout_light\.html/);
+  fs.writeFileSync(path.join(dir, "design-ref", "Home_light.html"), "<html>mine</html>");
+  const clash = await call(client, "inspect", { filePath: file, target: "Home · light", format: "html-ref" });
+  assert.equal(clash.isError, true);
+  assert.match(text(clash), /not written by inspect; refusing/);
+  assert.equal(fs.readFileSync(path.join(dir, "design-ref", "Home_light.html"), "utf8"), "<html>mine</html>");
+});
+
+test("with autosave off: a spec of an unsaved file can be refreshed, and close_file without saving drops the cached analysis", async () => {
+  const off = await connect({ home: path.join(dir, "home-off"), cwd: dir, env: { PEN_MULTI_AUTOSAVE: "0" } });
+  try {
+    const draft = path.join(dir, "draft.pen");
+    const put = (input) => call(off, "execute", { filePath: draft, input });
+    await put(`Insert(document, { type: "frame", name: "Draft · light", width: 390, height: 844, layout: "vertical" })`);
+    const spec = path.join(dir, "spec", "draft.json");
+    await call(off, "inspect", { filePath: draft, target: "Draft · light", savePath: spec });
+    assert.equal(JSON.parse(fs.readFileSync(spec, "utf8")).pen.sha1, null, "the file is not on disk yet");
+    const again = await call(off, "inspect", { filePath: draft, target: "Draft · light", savePath: spec });
+    assert.ok(!again.isError, text(again));
+
+    await call(off, "overview", { filePath: draft });
+    await call(off, "close_file", { filePath: draft, save: false });
+    const after = text(await call(off, "overview", { filePath: draft }));
+    assert.doesNotMatch(after, /Draft/, "the dropped screen is gone from the overview");
+  } finally {
+    await off.close();
+  }
+});

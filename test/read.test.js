@@ -21,10 +21,12 @@ const subtree = (id, depth, maxDepth) => {
 const fakeRun = (limit, calls) => async (input) => {
   const root = /const ROOT = "(\w+)"/.exec(input)[1];
   const maxDepth = Number(/c\.depth > (\d+)\) \{ skipped/.exec(input)[1]);
+  const maxNodes = Number(/nodes\.length >= (\d+)\)/.exec(input)[1]);
   calls.push([root, maxDepth]);
-  const nodes = subtree(root, 0, maxDepth);
+  const all = subtree(root, 0, maxDepth);
+  const nodes = all.slice(0, maxNodes); // like the engine, stop at the cap
   if (nodes.length > limit) return { error: "Failed to execute: InternalError: interrupted" };
-  return { text: `OK\n\n## Print output\nTREE ${JSON.stringify({ root, nodes, skipped: 0, refs: {}, comps: {}, variables: {}, themes: {} })}` };
+  return { text: `OK\n\n## Print output\nTREE ${JSON.stringify({ root, nodes, skipped: all.length - nodes.length, refs: {}, comps: {}, variables: {}, themes: {} })}` };
 };
 
 test("an interrupted read is split into the root and each child subtree, then stitched back correctly", async () => {
@@ -60,4 +62,12 @@ test("statistics batches are halved on interruption down to single roots", async
   const { stats, unavailable } = await readOverview(run, { batch: 5 });
   assert.deepEqual(Object.keys(stats).sort(), ["r0", "r1", "r2", "r3"]);
   assert.deepEqual(unavailable, ["r4"]);
+});
+
+test("the node budget holds across split reads, and what was left out is counted", async () => {
+  const calls = [];
+  // Every whole-subtree read of more than one node is interrupted, so everything is split.
+  const raw = await readSubtree(fakeRun(3, calls), "S", { maxNodes: 4 });
+  assert.ok(raw.nodes.length <= 4, `read ${raw.nodes.length} nodes with a budget of 4`);
+  assert.ok(raw.skipped > 0, "the nodes past the budget are reported");
 });

@@ -46,7 +46,9 @@ const nodes = [];
 let skipped = 0;
 Get(ROOT, (n, c) => {
   if (c.depth > ${maxDepth}) { skipped++; c.skipChildren(); return undefined; }
-  if (nodes.length >= ${maxNodes}) { skipped++; return undefined; }
+  // Past the cap, stop descending too (visiting the rest is what gets reads interrupted);
+  // the count is then a lower bound.
+  if (nodes.length >= ${maxNodes}) { skipped++; c.skipChildren(); return undefined; }
   const o = { id: n.id, parent: c.parentCtx ? c.parentCtx.node.id : null, depth: c.depth, bounds: c.bounds };
   for (const k of PROPS) if (n[k] !== undefined && n[k] !== null) o[k] = n[k];
   if (c.problems) o.problems = c.problems;

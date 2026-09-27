@@ -511,6 +511,7 @@ tool(
   { filePath, save: z.boolean().optional().describe("Save unsaved changes before closing. Default true.") },
   async ({ filePath: f, save }) => {
     const file = normalize(f);
+    designChanged(file); // with save: false, unsaved edits are dropped
     const closed = await pool.close(file, { save: save !== false });
     if (closed) return ok(`Closed ${file}`);
     const inApp = (await app.openFiles().catch(() => new Set())).has(file);

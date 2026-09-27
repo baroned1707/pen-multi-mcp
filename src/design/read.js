@@ -12,22 +12,38 @@ const printed = (text, label) => {
 const interrupted = (error) => /\binterrupted\b|timed out/i.test(error ?? "");
 
 /**
- * Reads the subtree under `rootId`. When the engine interrupts the whole read, the root is read
- * alone and each child subtree separately, recursively, then stitched back together.
+ * Reads the subtree under `rootId`, at most `maxNodes` nodes in total. When the engine interrupts
+ * the whole read, the root is read with its children only, then each child subtree separately
+ * with what is left of the budget, recursively, and stitched back together.
  */
 export async function readSubtree(run, rootId, { maxNodes = 4000 } = {}) {
-  const res = await run(readTree(rootId, { maxNodes }));
-  if (!res.error) return printed(res.text, "TREE");
+  const budget = { left: maxNodes };
+  return readWithin(run, rootId, budget);
+}
+
+async function readWithin(run, rootId, budget) {
+  const res = await run(readTree(rootId, { maxNodes: Math.max(1, budget.left) }));
+  if (!res.error) {
+    const tree = printed(res.text, "TREE");
+    budget.left -= tree.nodes.length;
+    return tree;
+  }
   if (!interrupted(res.error)) throw new ReadError(res.error);
 
-  const shallow = await run(readTree(rootId, { maxNodes, maxDepth: 1 }));
+  const shallow = await run(readTree(rootId, { maxNodes: Math.max(1, budget.left), maxDepth: 1 }));
   if (shallow.error) throw new ReadError(shallow.error);
   const head = printed(shallow.text, "TREE");
   const top = head.nodes.find((n) => n.id === rootId);
   const kids = head.nodes.filter((n) => n.parent === rootId);
-  const merged = { ...head, nodes: [top, ...kids], skipped: 0 };
+  budget.left -= 1 + kids.length;
+  const merged = { ...head, nodes: [top, ...kids], skipped: head.skipped ?? 0 };
   for (const kid of kids) {
-    const sub = await readSubtree(run, kid.id, { maxNodes });
+    if (budget.left <= 0) {
+      merged.skipped += 1; // at least the unread subtree's own children
+      continue;
+    }
+    budget.left += 1; // the child itself was already counted
+    const sub = await readWithin(run, kid.id, budget);
     for (const n of sub.nodes) if (n.id !== kid.id) merged.nodes.push(n);
     Object.assign(merged.refs, sub.refs);
     Object.assign(merged.comps, sub.comps);

@@ -141,28 +141,51 @@ export function collapse(children) {
   return out;
 }
 
-const SHELL_NAME = /header|footer|nav|tab ?bar|tabs|toolbar|app ?bar|bottom ?bar|status ?bar|điều hướng|thanh (điều hướng|tab|trên|dưới)|đầu trang|chân trang|^chân$/i;
-const SCROLL_NAME = /scroll|content|body|main|cuộn|nội dung|thân/i;
+// Whole words only: "Subheader", "Unavailable" and "Product tabs" are content, not app shell.
+const word = (alts) => new RegExp(`(^|[^\\p{L}\\p{N}])(${alts})([^\\p{L}\\p{N}]|$)`, "iu");
+const SHELL_NAME = word("header|footer|nav|navbar|navigation|tab ?bar|tabbar|toolbar|app ?bar|bottom ?bar|status ?bar|sidebar|side ?bar|nav ?rail|điều hướng|thanh tab|đầu trang|chân trang|chân");
+// Words that mean shell only as the whole name ("Tabs", not "Product tabs").
+const SHELL_ALONE = /^(tabs|menu|bar|top|bottom)$/i;
+const SCROLL_NAME = word("scroll|scroll ?view|content|body|main|cuộn|vùng cuộn|nội dung");
+const NOT_CONTENT = new Set(["note", "prompt", "context"]);
 
 /**
- * The screen's structure in reading order. App shell = children named like a header/footer/nav/tab
- * bar, or pinned (absolute) to the top or bottom edge. Everything else is a section, in order; the
- * main scroll container is expanded in place, and sections outside it are marked fixed (they do
- * not scroll). Nothing is dropped.
+ * The screen's structure in reading order.
+ * - App shell: children named like a header/footer/nav/tab bar/sidebar, or pinned (absolute, or in
+ *   an absolute-layout screen) along a whole edge. Edges are top/bottom for vertical screens and
+ *   left/right for horizontal ones.
+ * - Scroll container: only in a vertical screen with a fixed height, a child whose height fills the
+ *   screen (a name like "Content" breaks ties). It is expanded in place; the other sections then
+ *   sit outside it and are marked fixed. Without one, nothing is marked fixed.
+ * - Everything else is a section, in order. Nothing is dropped; notes are left to the outline.
  */
 export function sections(model) {
   const root = model.root;
-  const top = visibleChildren(root);
-  const edge = (c) => (c.abs.y <= 4 ? "top" : c.abs.y + c.abs.h >= root.abs.h - 4 ? "bottom" : null);
-  const pinned = (c) => (c.layoutPosition === "absolute" || layoutOf(root) === "none") && c.abs.h <= 140 && edge(c);
-  const isShell = (c) => Boolean(pinned(c) || SHELL_NAME.test(c.name ?? ""));
-  const scroll = top
-    .filter((c) => layoutOf(c) === "vertical" && (/^fill_container/.test(String(c.height)) || SCROLL_NAME.test(c.name ?? "")) && !isShell(c))
-    .sort((a, b) => b.abs.h - a.abs.h)[0];
+  const rootLayout = layoutOf(root) ?? "none";
+  const top = visibleChildren(root).filter((c) => !NOT_CONTENT.has(c.type));
+  const W = root.abs.w, H = root.abs.h;
+  const edge = (c) => {
+    if (rootLayout === "horizontal") return c.abs.x <= 4 ? "left" : c.abs.x + c.abs.w >= W - 4 ? "right" : null;
+    return c.abs.y <= 4 ? "top" : c.abs.y + c.abs.h >= H - 4 ? "bottom" : null;
+  };
+  const pinned = (c) => {
+    if (!(c.layoutPosition === "absolute" || rootLayout === "none")) return false;
+    const e = edge(c) ?? (c.abs.x <= 4 ? "left" : c.abs.x + c.abs.w >= W - 4 ? "right" : null);
+    if (e === "top" || e === "bottom") return c.abs.w >= 0.8 * W && c.abs.h <= 140;
+    if (e === "left" || e === "right") return c.abs.h >= 0.8 * H && c.abs.w <= 360;
+    return false;
+  };
+  const isShell = (c) => Boolean(pinned(c) || SHELL_NAME.test(c.name ?? "") || SHELL_ALONE.test((c.name ?? "").trim()));
+  const fixedHeight = typeof root.height === "number" || root.height === undefined;
+  const candidates =
+    rootLayout === "vertical" && fixedHeight
+      ? top.filter((c) => !isShell(c) && /^fill_container/.test(String(c.height)) && visibleChildren(c).length)
+      : [];
+  const scroll = candidates.sort((a, b) => Number(SCROLL_NAME.test(b.name ?? "")) - Number(SCROLL_NAME.test(a.name ?? "")) || b.abs.h - a.abs.h)[0] ?? null;
   const items = (n) => {
     const out = [];
     const walk = (x) => {
-      if (x.hidden) return;
+      if (x.hidden || NOT_CONTENT.has(x.type)) return;
       if (x.component && x !== n) out.push(`<${x.component.name}>`);
       if (x.type === "text") out.push(`"${clip(x.resolved?.content ?? x.content, 40)}"`);
       else if (x.type === "icon") out.push(`icon:${x.icon}`);
@@ -175,14 +198,34 @@ export function sections(model) {
   const body = [];
   for (const c of top) {
     if (shell.includes(c)) continue;
-    if (c === scroll) for (const k of visibleChildren(c)) body.push({ node: k, items: items(k), fixed: false });
+    if (c === scroll) for (const k of visibleChildren(c).filter((k) => !NOT_CONTENT.has(k.type))) body.push({ node: k, items: items(k), fixed: false });
     else body.push({ node: c, items: items(c), fixed: Boolean(scroll) });
   }
   return {
-    scroll: scroll ?? null,
-    shell: shell.map((c) => ({ node: c, where: edge(c) ?? "named", items: items(c) })),
+    scroll,
+    shell: shell.map((c) => ({ node: c, where: edge(c) ?? (pinned(c) ? "pinned" : "named"), items: items(c) })),
     sections: body,
   };
+}
+
+/** Sections with repeated siblings (list rows) collapsed, capped for output. */
+export function sectionLines(sec, { max = 40 } = {}) {
+  const lines = [];
+  const groups = collapse(sec.sections.map((s) => s.node));
+  const byNode = new Map(sec.sections.map((s) => [s.node, s]));
+  let i = 0;
+  for (const g of groups) {
+    const s = byNode.get(g.node);
+    i++;
+    if (lines.length >= max) {
+      lines.push(`… ${groups.length - i + 1} more sections: inspect a section id or raise maxLines`);
+      break;
+    }
+    const label = s.node.name ?? s.node.type;
+    lines.push(`${i}. ${label}${s.fixed ? " (fixed)" : ""} — ${s.items.slice(0, 12).join(" ")}${s.items.length > 12 ? ` … +${s.items.length - 12}` : ""}`);
+    if (g.count > 1) lines.push(`   ×${g.count - 1} more like ${label}`);
+  }
+  return lines;
 }
 
 // ---------------------------------------------------------------- code hints

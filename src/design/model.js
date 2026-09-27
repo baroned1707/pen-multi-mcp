@@ -33,7 +33,9 @@ export function buildModel(raw) {
     const refs = raw.refs ?? {};
     const segs = id.split("/");
     const own = refs[id] ?? refs[segs.at(-1)];
-    // An ancestor instance may have swapped this nested instance for another component.
+    // An ancestor instance may have swapped this nested instance for another component. A whole
+    // { type: "ref" } replacement gets its own id (linked directly in refs); this covers overrides
+    // that change `ref` in place, where the path still ends with the original key.
     for (let i = 0; i < segs.length - 1; i++) {
       const swap = refs[segs.slice(0, i + 1).join("/")]?.[2]?.[segs.slice(i + 1).join("/")];
       if (swap) return { id: swap, name: raw.comps?.[swap] ?? swap, overrides: own?.[1] ?? [], swapped: true };

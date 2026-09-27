@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { buildModel } from "./model.js";
-import { outline, sections, toJson } from "./inspect.js";
+import { outline, sectionLines, sections, toJson } from "./inspect.js";
 import { analyze, renderOverview } from "./overview.js";
 import { ReadError, readOverview, readSubtree } from "./read.js";
 
@@ -28,7 +28,18 @@ const mtime = (file) => (fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0);
 
 export function registerDesignTools({ tool, z, route, app, pool, saver, timings, ok, fail, fromApp, textOf, optionalFilePath }) {
   const cache = new Map(); // file -> { key, analysis }
-  const invalidate = (file) => cache.delete(file);
+  const generations = new Map(); // file -> count of writes seen through this server
+  const invalidate = (file) => {
+    cache.delete(file);
+    generations.set(file, (generations.get(file) ?? 0) + 1);
+  };
+  // While this server has a file open headlessly, its content changes only through this server, so
+  // the write count identifies it (a background save changing the mtime is not a new version).
+  const cacheKey = (target) => {
+    if (target.mode === "app") return `app:${Math.floor(Date.now() / APP_CACHE_MS)}`;
+    const session = pool.sessions.get(target.file);
+    return session ? `session:${session.openedAt}:${generations.get(target.file) ?? 0}` : `disk:${mtime(target.file)}`;
+  };
 
   /** A `run(input)` for read-only snippets on the routed document. */
   const reader = (target) =>
@@ -39,10 +50,11 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
         }
       : (input) => pool.use(target.file, (session) => timings.time("call", () => session.shell.call("execute", { input })));
 
-  async function analysisOf(target, { refresh = false } = {}) {
-    const key = target.mode === "app" ? `app:${Math.floor(Date.now() / APP_CACHE_MS)}` : `disk:${mtime(target.file)}`;
+  async function analysisOf(target, { refresh = false, cachedOnly = false } = {}) {
+    const key = cacheKey(target);
     const hit = cache.get(target.file);
     if (!refresh && hit && hit.key === key) return { ...hit, cached: true };
+    if (cachedOnly) return null;
     const conv = conventions(target.file);
     const { data, stats, unavailable } = await readOverview(reader(target));
     const entry = { key, analysis: analyze(data, stats, conv), unavailable, readAt: new Date().toISOString() };
@@ -75,19 +87,25 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
    * Resolves a target: an exact frame id or name; else any node id that exists; else a unique
    * screen code / partial name. Ambiguous or unknown targets list candidates instead of guessing.
    */
+  const framesOf = (analysis) => analysis.matrix.rows.flatMap((r) => Object.values(r.cells).flat().map((c) => ({ ...c, row: r })));
+
   async function resolveTarget(target, wanted, { refreshed = false } = {}) {
-    const { analysis } = await analysisOf(target, { refresh: refreshed });
-    const frames = analysis.matrix.rows.flatMap((r) => Object.values(r.cells).flat().map((c) => ({ ...c, row: r })));
-    const exact = frames.filter((c) => c.id === wanted || c.name === wanted);
-    if (exact.length === 1) return { id: exact[0].id, frame: exact[0], analysis };
-    if (!exact.length && /^[\w-]+(\/[\w-]+)*$/.test(wanted)) {
+    // A node id is read directly; the document-wide analysis is only used if already cached, so
+    // inspecting by id right after an edit does not re-read the whole document.
+    if (!refreshed && /^[\w-]+(\/[\w-]+)*$/.test(wanted)) {
       try {
         const raw = await readSubtree(reader(target), wanted);
-        return { id: wanted, frame: null, analysis, raw };
+        const cached = await analysisOf(target, { cachedOnly: true });
+        const frame = cached ? framesOf(cached.analysis).find((c) => c.id === wanted) ?? null : null;
+        return { id: wanted, frame, analysis: cached?.analysis ?? null, raw };
       } catch (err) {
         if (!/can't find node|not found|does not exist/i.test(err.message)) throw err;
       }
     }
+    const { analysis } = await analysisOf(target, { refresh: refreshed });
+    const frames = framesOf(analysis);
+    const exact = frames.filter((c) => c.id === wanted || c.name === wanted);
+    if (exact.length === 1) return { id: exact[0].id, frame: exact[0], analysis };
     const lower = wanted.toLowerCase();
     // Exact name matches win over partial ones; two frames with the same name are still ambiguous.
     const loose = exact.length ? exact : frames.filter((c) => c.row.code?.toLowerCase() === lower || c.name.toLowerCase().includes(lower));
@@ -109,7 +127,7 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
 
   function breadcrumb(analysis, frame, model) {
     const lines = [];
-    if (frame) {
+    if (frame && analysis) {
       const row = frame.row;
       const variants = Object.entries(row.cells).flatMap(([w, cs]) => cs.map((c) => `${c.name} (${w}${c.theme ? `, ${c.theme}` : ""}) → ${c.id}`));
       lines.push(`Screen: ${row.screen}${row.state ? ` — state ${row.state}` : ""}`);
@@ -161,13 +179,13 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
           try {
             prev = JSON.parse(fs.readFileSync(out, "utf8"));
           } catch {}
-          if (!prev?.pen?.sha1) throw new ReadError(`${out} exists and is not an inspect spec; refusing to overwrite it.`);
+          if (!(prev?.pen && "sha1" in prev.pen)) throw new ReadError(`${out} exists and is not an inspect spec; refusing to overwrite it.`);
         }
         // Hash what is on disk after pending saves, so the hash matches the data just read.
         await saver?.flush(target.file).catch(() => {});
         const unsaved = Boolean(pool.sessions.get(target.file)?.dirty);
         const hash = fileHash(target.file);
-        if (prev && prev.pen.sha1 !== hash) notes.push(`The previous spec at ${out} was stale: the design changed since ${prev.generatedAt}.`);
+        if (prev && prev.pen.sha1 && prev.pen.sha1 !== hash) notes.push(`The previous spec at ${out} was stale: the design changed since ${prev.generatedAt}.`);
         fs.mkdirSync(path.dirname(out), { recursive: true });
         fs.writeFileSync(
           out,
@@ -189,14 +207,31 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
       }
 
       if (format === "json") {
-        const body = { target: { id, name: model.root.name }, breadcrumb: crumb, shell: sec.shell.map((s) => ({ name: s.node.name, where: s.where, items: s.items })), sections: sec.sections.map((s) => ({ name: s.node.name, fixed: s.fixed, items: s.items })), ...toJson(model) };
+        const full = toJson(model);
+        // Inline JSON is capped (a 4,000-node screen is ~1 MB); the saved spec is complete.
+        const cap = maxLines;
+        const body = {
+          target: { id, name: model.root.name },
+          breadcrumb: crumb,
+          shell: sec.shell.map((s) => ({ name: s.node.name, where: s.where, items: s.items })),
+          sections: sec.sections.slice(0, 200).map((s) => ({ name: s.node.name ?? s.node.type, fixed: s.fixed, items: s.items.slice(0, 30) })),
+          ...full,
+          nodes: full.nodes.slice(0, cap),
+          truncatedNodes: full.nodes.length > cap ? full.nodes.length - cap : undefined,
+        };
+        if (body.truncatedNodes) notes.push(`${body.truncatedNodes} nodes are not included inline: pass savePath for the complete spec, or inspect a child id.`);
         return wrap(target, [...notes, JSON.stringify(body)]);
       }
 
       if (format === "html-ref") {
         const safe = String(model.root.name ?? id).replace(/[^\p{L}\p{N}_-]+/gu, "_").replace(/^_+|_+$/g, "") || id.replace(/\W+/g, "_");
-        const base = savePath ? path.resolve(process.cwd(), savePath).replace(/\.json$/i, "") : path.join(path.dirname(target.file), safe);
+        // Written into its own folder so a screen called "index" never replaces a project's index.html.
+        const base = savePath ? path.resolve(process.cwd(), savePath).replace(/\.json$/i, "") : path.join(path.dirname(target.file), "design-ref", safe);
         const htmlPath = `${base}.html`;
+        if (fs.existsSync(htmlPath) && !fs.readFileSync(htmlPath, "utf8").includes("data-pen=")) {
+          throw new ReadError(`${htmlPath} exists and was not written by inspect; refusing to overwrite it. Pass savePath to choose another place.`);
+        }
+        fs.mkdirSync(path.dirname(htmlPath), { recursive: true });
         const res = await run(`Export(${JSON.stringify([id])}, "html-css", ${JSON.stringify(htmlPath)}, { includeLayerNames: true })`);
         if (res.error) throw new ReadError(res.error);
         const html = fs.readFileSync(htmlPath, "utf8");
@@ -211,14 +246,14 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
       }
 
       const lines = [
-        `# ${model.root.name ?? id} (${id})`,
+        `# ${model.root.name ?? model.root.type} (${id})`,
         ...crumb,
         "",
-        "## App shell (inferred: docked to the top/bottom or named like a header/nav/tab bar)",
-        ...(sec.shell.length ? sec.shell.map((s) => `- ${s.where}: ${s.node.name} — ${s.items.slice(0, 10).join(" ")}`) : ["- none"]),
+        "## App shell (inferred: named like a header/footer/nav/tab bar/sidebar, or pinned along an edge)",
+        ...(sec.shell.length ? sec.shell.map((s) => `- ${s.where}: ${s.node.name ?? s.node.type} — ${s.items.slice(0, 10).join(" ")}`) : ["- none"]),
         "",
-        `## Sections in order${sec.scroll ? ` (scroll container "${sec.scroll.name}"; "fixed" sections sit outside it and do not scroll)` : ""}`,
-        ...sec.sections.map((s, i) => `${i + 1}. ${s.node.name}${s.fixed ? " (fixed)" : ""} — ${s.items.slice(0, 12).join(" ")}${s.items.length > 12 ? ` … +${s.items.length - 12}` : ""}`),
+        `## Sections in order${sec.scroll ? ` (scroll container "${sec.scroll.name ?? sec.scroll.type}"; "fixed" sections sit outside it and do not scroll)` : ""}`,
+        ...sectionLines(sec),
         "",
         "## Outline",
         ...outline(model, { depth, maxLines, flavor, continueWith: (nodeId) => `inspect({ filePath: ${JSON.stringify(target.file)}, target: ${JSON.stringify(nodeId)} })` }),

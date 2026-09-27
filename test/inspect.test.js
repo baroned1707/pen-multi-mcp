@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildModel } from "../src/design/model.js";
-import { collapse, describe, hint, outline, sections, toJson } from "../src/design/inspect.js";
+import { collapse, describe, hint, outline, sectionLines, sections, toJson } from "../src/design/inspect.js";
 
 const node = (id, parent, bounds, props = {}) => ({ id, parent, depth: 0, bounds: { x: bounds[0], y: bounds[1], width: bounds[2], height: bounds[3] }, ...props });
 const rows = ["Alpha", "Beta", "Gamma", "Delta"].flatMap((t, i) => [
@@ -150,4 +150,51 @@ test("children of a group are positioned; token weights use their resolved value
   assert.match(hint(m, m.nodes.get("R"), m.nodes.get("G"), "css"), /position:absolute; left:5px; top:6px/);
   assert.match(hint(m, m.nodes.get("T"), m.root, "css"), /font-weight:600/);
   assert.match(describe(m, m.nodes.get("T")), /\$w\(600\)/);
+});
+
+const screen = (layout, kids, extra = {}) =>
+  buildModel({ root: "S", nodes: [node("S", null, [0, 0, 390, 844], { type: "frame", name: "S", layout, height: 844, ...extra }), ...kids], refs: {}, comps: {}, variables: {}, themes: {} });
+
+test("a landing page without a filling child has no scroll container, and nothing is fixed or dropped", () => {
+  const s = sections(screen("vertical", [
+    node("h", "S", [0, 0, 390, 300], { type: "frame", name: "Hero" }),
+    node("m", "S", [0, 300, 390, 300], { type: "frame", name: "Main features", layout: "vertical" }),
+    node("m1", "m", [0, 0, 390, 100], { type: "frame", name: "Feature" }),
+    node("p", "S", [0, 600, 390, 244], { type: "frame", name: "Pricing" }),
+  ]));
+  assert.equal(s.scroll, null);
+  assert.deepEqual(s.sections.map((x) => [x.node.name, x.fixed]), [["Hero", false], ["Main features", false], ["Pricing", false]]);
+});
+
+test("a horizontal screen: the sidebar is shell on the left, Main is a section, not fixed", () => {
+  const s = sections(screen("horizontal", [
+    node("sb", "S", [0, 0, 240, 844], { type: "frame", name: "Sidebar", height: "fill_container" }),
+    node("mn", "S", [240, 0, 150, 844], { type: "frame", name: "Main", height: "fill_container", layout: "vertical" }),
+  ]));
+  assert.deepEqual(s.shell.map((x) => [x.node.name, x.where]), [["Sidebar", "left"]]);
+  assert.deepEqual(s.sections.map((x) => [x.node.name, x.fixed]), [["Main", false]]);
+});
+
+test("names are matched as whole words; small absolute buttons are not pinned bars", () => {
+  const s = sections(screen("none", [
+    node("x", "S", [340, 2, 40, 40], { type: "frame", name: "Close" }),
+    node("u", "S", [0, 100, 390, 200], { type: "frame", name: "Unavailable" }),
+    node("sh", "S", [0, 300, 390, 60], { type: "frame", name: "Subheader" }),
+    node("pt", "S", [0, 360, 390, 60], { type: "frame", name: "Product tabs" }),
+    node("lg", "S", [0, 824, 200, 20], { type: "text", name: "Legal", content: "© 2026" }),
+    node("tb", "S", [0, 780, 390, 64], { type: "frame", name: "Dock" }),
+    node("nt", "S", [0, 0, 100, 40], { type: "note", content: "why" }),
+  ]));
+  assert.deepEqual(s.shell.map((x) => [x.node.name, x.where]), [["Dock", "bottom"]]);
+  assert.deepEqual(s.sections.map((x) => x.node.name ?? x.node.type), ["Close", "Unavailable", "Subheader", "Product tabs", "Legal"]);
+});
+
+test("section lists collapse repeated rows and stop at the cap", () => {
+  const rowsNodes = Array.from({ length: 60 }, (_, i) => node(`r${i}`, "L", [0, i * 10, 390, 10], { type: "frame", name: "Row" }));
+  const s = sections(screen("vertical", [node("L", "S", [0, 0, 390, 844], { type: "frame", name: "List", layout: "vertical", height: "fill_container" }), ...rowsNodes]));
+  assert.deepEqual(sectionLines(s), ["1. Row — ", "   ×59 more like Row"]);
+  const many = sections(screen("vertical", Array.from({ length: 50 }, (_, i) => node(`k${i}`, "S", [0, i * 10, 390, 10], { type: "frame", name: `Block ${i}` }))));
+  const lines = sectionLines(many, { max: 5 });
+  assert.equal(lines.length, 6);
+  assert.match(lines[5], /45 more sections/);
 });
