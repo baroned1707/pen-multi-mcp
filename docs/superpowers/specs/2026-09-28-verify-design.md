@@ -71,6 +71,10 @@ Refinements from running against real apps (trading-agent web, an Android emulat
 - More than 8 extra texts are summarized in one finding (usually a wrong route/state or a whole old screen).
 - Phone chrome drawn in mockups (status bar, home indicator) is skipped, and so is the device's own status bar band (probe inset) in the pixel comparison.
 - Pixel regions already explained by an element finding (on the design node, or where the UI moved it) are counted, not listed.
+- Web capture: scrolls through the page first, walks open shadow roots, clips only by ancestors that contain the box (body overflow propagated to the viewport, absolute/fixed escape), inline paragraphs are one text unless a descendant carries a marker, non-text inputs contribute no text, icon-font ligatures are dropped, ellipsis/line-clamp truncation is a finding.
+- Section order is reading order on both sides (layer order can be z-order); fixed/sticky bars may match the viewport's bottom instead of the frame's.
+- On devices wider than the frame, pixels of matched leaf nodes without findings are ignored (never sections/shells, never content-matched containers).
+- The Android status-bar offset is chosen by comparing element backgrounds with the screenshot at both candidate offsets.
 - pen-probe boxes from edge-to-edge windows (negative root y) are shifted to screen coordinates; Fabric views without a public instance are measured through nativeFabricUIManager / UIManager.
 
 ## Findings

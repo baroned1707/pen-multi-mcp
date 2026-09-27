@@ -101,8 +101,9 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
   /** The frame to verify: the target, or its sibling cell for another width/theme. */
   async function pickFrame(target, wanted, { width, theme }) {
     let resolved = await design.resolveTarget(target, wanted);
-    // An id resolves without the document analysis unless it is cached; width/theme need the row.
-    if ((width || theme) && !resolved.frame) resolved = await design.resolveTarget(target, wanted, { refreshed: true });
+    // An id resolves without the document analysis unless it is cached; the row (width/theme
+    // variants) and the frame's theme need it.
+    if (!resolved.frame) resolved = await design.resolveTarget(target, wanted, { refreshed: true });
     let { id, frame } = resolved;
     if ((width || theme) && !frame?.row) throw new ReadError(`${wanted} is not a screen frame, so width/theme cannot pick a variant; pass the screen's name or frame id, or leave width/theme out.`);
     if (frame?.row && (width || theme)) {
@@ -154,6 +155,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       const run = design.reader(target);
       const { id, theme: frameTheme } = await pickFrame(target, wanted, { width, theme });
       const model = buildModel(await readSubtree(run, id));
+      const rootTheme = model.root.theme && typeof model.root.theme === "object" ? Object.values(model.root.theme)[0] : undefined;
       const d = designNodes(model);
       const name = slug([model.root.name ?? id, width, theme].filter(Boolean).join("-"));
       const outBase = path.join(process.cwd(), OUT_DIR, name);
@@ -167,7 +169,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
       } else {
         const viewportH = Math.min(d.frame.h, 1080);
-        ({ snapshot, snapshotPath } = await capture(src, { width: d.frame.w, height: viewportH, colorScheme: colorSchemeOf(frameTheme), name }));
+        ({ snapshot, snapshotPath } = await capture(src, { width: d.frame.w, height: viewportH, colorScheme: colorSchemeOf(frameTheme ?? rootTheme), name }));
       }
       const designImg = readPng(designPng);
       const uiImg = snapshot.screenshot && fs.existsSync(snapshot.screenshot) ? readPng(snapshot.screenshot) : null;

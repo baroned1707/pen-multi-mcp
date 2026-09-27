@@ -20,7 +20,7 @@ async function launch() {
   );
 }
 
-/** Runs in the page: collects visible elements in document order. */
+/** Runs in the page: collects visible elements in document order (open shadow roots included). */
 function collect(limit) {
   const out = [];
   const index = new Map();
@@ -46,75 +46,115 @@ function collect(limit) {
     for (let cur = el; cur && cur !== document.body && parts.length < 4; cur = cur.parentElement) parts.unshift(selector(cur));
     return parts.join(" > ");
   };
-  // The part of an element's box not clipped away by ancestors with overflow other than visible.
-  const clipped = (el, r) => {
+  // overflow on <body> moves to the viewport when <html> has none: body then clips nothing.
+  const htmlOverflowVisible = getComputedStyle(document.documentElement).overflow === "visible";
+  // Clipped away entirely by an ancestor with overflow other than visible? Only ancestors that
+  // contain the element's box count: an absolute box escapes static ancestors, a fixed one all.
+  const clipped = (el, r, cs) => {
+    if (cs.position === "fixed") return false;
     let x1 = r.left, y1 = r.top, x2 = r.right, y2 = r.bottom;
+    let escapesStatic = cs.position === "absolute";
     for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) {
       const ps = getComputedStyle(p);
-      if (ps.overflowX === "visible" && ps.overflowY === "visible") continue;
-      const pr = p.getBoundingClientRect();
-      if (ps.overflowX !== "visible") (x1 = Math.max(x1, pr.left)), (x2 = Math.min(x2, pr.right));
-      if (ps.overflowY !== "visible") (y1 = Math.max(y1, pr.top)), (y2 = Math.min(y2, pr.bottom));
-      if (x2 <= x1 || y2 <= y1) return true;
+      const positioned = ps.position !== "static";
+      if (!(escapesStatic && !positioned) && !(p === document.body && htmlOverflowVisible) && !(ps.overflowX === "visible" && ps.overflowY === "visible")) {
+        const pr = p.getBoundingClientRect();
+        if (ps.overflowX !== "visible") (x1 = Math.max(x1, pr.left)), (x2 = Math.min(x2, pr.right));
+        if (ps.overflowY !== "visible") (y1 = Math.max(y1, pr.top)), (y2 = Math.min(y2, pr.bottom));
+        if (x2 <= x1 || y2 <= y1) return true;
+      }
+      if (ps.position === "fixed") return false;
+      if (positioned) escapesStatic = ps.position === "absolute";
     }
     return false;
   };
-  // A paragraph with inline children (links, <strong>, <br>) is one text, as the design has it.
-  const INLINE = /^(inline|contents)/;
-  const phrasing = (el) => [...el.children].every((c) => INLINE.test(getComputedStyle(c).display) && phrasing(c));
+  // A paragraph whose children are all inline (links, <strong>, <br>) is one text, as the design has it.
+  // inline-block / inline-flex children (buttons, chips, badges) stay separate texts.
+  const phrasing = (el) => [...el.children].every((c) => /^(inline|contents)$/.test(getComputedStyle(c).display) && phrasing(c));
+  const TEXT_INPUT = /^(text|search|email|url|tel|password|number|date|time|datetime-local|month|week|button|submit|reset)$/;
+  const ICON_FONT = /material (icons|symbols)|icon|fontawesome|font awesome|ionicons|glyph/i;
   const owned = new Set(); // elements whose text belongs to an ancestor's paragraph
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-  for (let el = document.body; el && out.length < limit; el = walker.nextNode()) {
+
+  const visit = (el) => {
+    if (out.length >= limit) return;
     const cs = getComputedStyle(el);
-    if (cs.display === "none") continue;
+    if (cs.display === "none") return;
     // checkVisibility covers hidden or transparent ancestors, content-visibility and closed <details>.
-    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) continue;
-    if (!el.checkVisibility && (cs.visibility !== "visible" || Number(cs.opacity) === 0)) continue;
+    if (el.checkVisibility ? !el.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true }) : cs.visibility !== "visible" || Number(cs.opacity) === 0) {
+      if (cs.display !== "contents") return;
+    }
     const r = el.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0 || clipped(el, r)) continue;
-    let text = "";
-    if (/^(INPUT|TEXTAREA)$/.test(el.tagName)) text = el.value || el.placeholder || "";
-    else if (!owned.has(el)) {
-      let own = "";
-      for (const c of el.childNodes) if (c.nodeType === Node.TEXT_NODE) own += c.textContent;
-      if (el.children.length && phrasing(el) && (own.trim() || el.children.length > 1) && el.innerText?.trim()) {
-        // innerText applies text-transform and turns <br> into a break; collapse to one line.
-        text = el.innerText;
-        for (const d of el.querySelectorAll("*")) owned.add(d);
-      } else if (own.trim()) text = el.children.length === 0 && el.innerText ? el.innerText : own;
+    const shown = r.width > 0 && r.height > 0 && !clipped(el, r, cs);
+    if (shown) {
+      let text = "";
+      if (el.tagName === "INPUT") text = TEXT_INPUT.test(el.type) ? el.value || el.placeholder || "" : "";
+      else if (el.tagName === "TEXTAREA") text = el.value || el.placeholder || "";
+      else if (el.tagName === "SELECT") text = el.selectedOptions?.[0]?.text ?? "";
+      else if (!owned.has(el) && !ICON_FONT.test(cs.fontFamily)) {
+        let own = "";
+        for (const c of el.childNodes) if (c.nodeType === Node.TEXT_NODE) own += c.textContent;
+        const marked = el.querySelector("[data-pen]");
+        if (el.children.length && !marked && phrasing(el) && (own.trim() || el.children.length > 1) && el.innerText?.trim()) {
+          // innerText applies text-transform and turns <br> into a break; collapse to one line.
+          text = el.innerText;
+          for (const d of el.querySelectorAll("*")) owned.add(d);
+        } else if (own.trim()) text = el.children.length === 0 && el.innerText ? el.innerText : own;
+      }
+      text = text.replace(/\s+/g, " ").trim();
+      let parent;
+      for (let p = el.parentElement ?? el.getRootNode()?.host; p; p = p.parentElement ?? p.getRootNode()?.host) {
+        if (index.has(p)) {
+          parent = index.get(p);
+          break;
+        }
+      }
+      const bw = Math.max(num(cs.borderTopWidth) ?? 0, num(cs.borderRightWidth) ?? 0, num(cs.borderBottomWidth) ?? 0, num(cs.borderLeftWidth) ?? 0);
+      const lh = cs.lineHeight === "normal" ? undefined : num(cs.lineHeight);
+      // Text cut by ellipsis or line clamp still has its full DOM text; flag it.
+      const truncated = text && (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) && (cs.overflow !== "visible" || cs.webkitLineClamp !== "none");
+      const o = {
+        i: out.length,
+        parent,
+        tag: el.tagName.toLowerCase(),
+        selector: path(el),
+        marker: el.getAttribute("data-pen") || undefined,
+        text: text || undefined,
+        truncated: truncated || undefined,
+        fixed: cs.position === "fixed" || cs.position === "sticky" || undefined,
+        box: { x: r.left + sx, y: r.top + sy, w: r.width, h: r.height },
+        bg: cs.backgroundColor,
+        fg: text ? cs.color : undefined,
+        fontSize: text ? num(cs.fontSize) : undefined,
+        fontWeight: text ? num(cs.fontWeight) : undefined,
+        lineHeight: text ? lh : undefined,
+        radius: num(cs.borderTopLeftRadius),
+        borderWidth: bw,
+        borderColor: bw > 0 ? cs.borderTopColor : undefined,
+        opacity: Number(cs.opacity),
+      };
+      index.set(el, o.i);
+      out.push(o);
     }
-    text = text.replace(/\s+/g, " ").trim();
-    let parent;
-    for (let p = el.parentElement; p; p = p.parentElement) if (index.has(p)) {
-      parent = index.get(p);
-      break;
-    }
-    const bw = Math.max(num(cs.borderTopWidth) ?? 0, num(cs.borderRightWidth) ?? 0, num(cs.borderBottomWidth) ?? 0, num(cs.borderLeftWidth) ?? 0);
-    const lh = cs.lineHeight === "normal" ? undefined : num(cs.lineHeight);
-    const o = {
-      i: out.length,
-      parent,
-      tag: el.tagName.toLowerCase(),
-      selector: path(el),
-      marker: el.getAttribute("data-pen") || undefined,
-      text: text || undefined,
-      box: { x: r.left + sx, y: r.top + sy, w: r.width, h: r.height },
-      bg: cs.backgroundColor,
-      fg: text ? cs.color : undefined,
-      fontSize: text ? num(cs.fontSize) : undefined,
-      fontWeight: text ? num(cs.fontWeight) : undefined,
-      lineHeight: text ? lh : undefined,
-      radius: num(cs.borderTopLeftRadius),
-      borderWidth: bw,
-      borderColor: bw > 0 ? cs.borderTopColor : undefined,
-      opacity: Number(cs.opacity),
-    };
-    index.set(el, o.i);
-    out.push(o);
-  }
+    for (const c of el.children) visit(c);
+    if (el.shadowRoot) for (const c of el.shadowRoot.children) visit(c);
+  };
+  visit(document.body);
   const bodyBg = getComputedStyle(document.body).backgroundColor;
   const pageBg = /^rgba\(0, 0, 0, 0\)$|^transparent$/.test(bodyBg) ? getComputedStyle(document.documentElement).backgroundColor : bodyBg;
   return { elements: out, pageBg, truncated: out.length >= limit, scroll: { w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight } };
+}
+
+/** Scrolls through the page so content revealed on scroll (IntersectionObserver, lazy images) is shown. */
+async function revealAll(page) {
+  await page.evaluate(async () => {
+    const step = Math.max(200, Math.floor(window.innerHeight * 0.8));
+    for (let y = 0; y < document.documentElement.scrollHeight && y < 40_000; y += step) {
+      window.scrollTo(0, y);
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    window.scrollTo(0, 0);
+  });
+  await page.waitForTimeout(300);
 }
 
 async function runStep(page, step) {
@@ -142,6 +182,7 @@ export async function captureWeb({ url, steps = [], fullPage = true, width, heig
     if (res && res.status() >= 400) throw new Error(`${url} answered HTTP ${res.status()}`);
     await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
     for (const step of steps) await runStep(page, step);
+    if (fullPage) await revealAll(page);
     await page.evaluate(() => document.fonts?.ready);
     await page.waitForTimeout(150);
     const data = await page.evaluate(collect, limit);

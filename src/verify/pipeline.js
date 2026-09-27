@@ -26,7 +26,7 @@ export function verifyScreen({ design, snapshot, designImg, uiImg, tolerance }) 
   const matched = imageOnly
     ? { pairs: new Map(), unmatchedDesign: [], unmatchedUi: [], markerMisses: [] }
     : match(design, ui);
-  const findings = imageOnly ? [] : compare(design, ui, matched, { tolerance, fields, viewportW: ui.viewportW });
+  const findings = imageOnly ? [] : compare(design, ui, matched, { tolerance, fields, viewportW: ui.viewportW, viewportH: snapshot.viewport?.h });
 
   if (designImg && uiImg) {
     // Texts already compared as elements are skipped: anti-aliasing differs between renderers.
@@ -35,11 +35,16 @@ export function verifyScreen({ design, snapshot, designImg, uiImg, tolerance }) 
     const ignore = [...chromeBoxes, ...(imageOnly ? [] : design.nodes.filter((n) => n.kind === "text" && matched.pairs.has(n.id)).map((n) => n.box))];
     // A device wider or narrower than the frame shifts right- and center-anchored elements that the
     // element comparison accepted; their pixels (at both places) are not differences.
-    if (!imageOnly && ui.viewportW && Math.abs(ui.viewportW - design.frame.w) > 2) {
+    // Only leaves (texts, icons, instances, shapes without compared contents): ignoring a section
+    // would hide whatever inside it differs. Fixed bars drawn against the viewport likewise.
+    if (!imageOnly) {
+      const wider = ui.viewportW && Math.abs(ui.viewportW - design.frame.w) > 2;
       const flaggedIds = new Set(findings.filter((f) => f.designId).map((f) => f.designId));
+      const hasInside = new Set(design.nodes.flatMap((n) => n.ancestors ?? []));
       for (const [id, p] of matched.pairs) {
-        if (flaggedIds.has(id)) continue;
-        ignore.push(design.nodes.find((n) => n.id === id).box, p.el.box);
+        const n = design.nodes.find((x) => x.id === id);
+        if (flaggedIds.has(id) || p.how === "content" || n.kind === "section" || n.kind === "shell" || hasInside.has(id)) continue;
+        if (wider || p.el.fixed) ignore.push(n.box, p.el.box);
       }
     }
     const opts = imageOnly ? { cell: 8, threshold: 12 } : { cell: 12, threshold: 15, minCells: 3 };

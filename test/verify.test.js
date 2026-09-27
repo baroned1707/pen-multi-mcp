@@ -153,3 +153,25 @@ test("a frame id with a theme that has no variant is an error, not a silent comp
   assert.equal(res.isError, true);
   assert.match(text(res), /no frame for theme dark/);
 });
+
+test("web capture: deep content under body overflow-x, escaped fixed text, separate buttons, marked labels, no checkbox value, icon fonts, truncation, scroll reveal, shadow DOM", async () => {
+  fs.writeFileSync(
+    path.join(dir, "r2.html"),
+    `<html><head><style>html,body{height:100%;margin:0} body{overflow-x:hidden} .reveal{opacity:0}.reveal.on{opacity:1} .clip{width:80px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}</style></head><body>
+<div style="height:1200px">top</div><section><h2>Deep section</h2></section>
+<div style="overflow:hidden;height:10px"><div style="position:fixed;bottom:0">Escaped fixed text</div></div>
+<div><button>Cancel</button> <button>OK</button></div>
+<button data-pen="Button"><svg width="10" height="10"></svg> <span data-pen="Button/Label">Save</span></button>
+<label><input type="checkbox"> Remember me</label><select><option>Choice A</option></select>
+<span style="font-family:'Material Icons'">home</span>
+<p class="clip">A very long title that is cut</p>
+<div class="reveal" id="rv">Revealed on scroll</div><my-el></my-el>
+<script>new IntersectionObserver((es)=>es.forEach(e=>e.isIntersecting&&e.target.classList.add('on'))).observe(document.getElementById('rv'));
+customElements.define('my-el', class extends HTMLElement { constructor(){ super(); this.attachShadow({mode:'open'}).innerHTML = '<b>Shadow text</b>'; } });</script></body></html>`,
+  );
+  const cap = await call(client, "capture", { source: { kind: "web", url: url("r2.html") }, savePath: "r2-capture" });
+  assert.ok(!cap.isError, text(cap));
+  const snap = JSON.parse(fs.readFileSync(path.join(dir, "r2-capture.json"), "utf8"));
+  const texts = snap.elements.filter((e) => e.text).map((e) => e.text + (e.truncated ? " [truncated]" : "") + (e.fixed ? " [fixed]" : ""));
+  assert.deepEqual(texts, ["top", "Deep section", "Escaped fixed text [fixed]", "Cancel", "OK", "Save", "Remember me", "Choice A", "A very long title that is cut [truncated]", "Revealed on scroll", "Shadow text"]);
+});

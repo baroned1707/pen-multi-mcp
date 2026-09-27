@@ -4,7 +4,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
-import { readPngBuffer, writePng } from "../image.js";
+import { deltaE, parseColor } from "../color.js";
+import { readPngBuffer, sampleColors, writePng } from "../image.js";
 import { run } from "./native.js";
 
 export const PROBE_PORT = Number(process.env.PEN_MULTI_PROBE_PORT ?? 7357);
@@ -77,11 +78,13 @@ export function receiveSnapshot({ port = PROBE_PORT, timeoutMs = 20_000 } = {}) 
  * starts below the status bar while the root view starts at the top of the screen, so the root
  * reports a negative y. Shifting by it lines the boxes up with the full-screen screenshot.
  */
-export function probeElements(body) {
+export function probeElements(body, { offsetY } = {}) {
   if (!Array.isArray(body?.elements)) throw new Error("pen-probe posted no elements");
   const els = body.elements.filter((e) => e && e.box && e.box.w > 0 && e.box.h > 0).map((e, k) => ({ ...e, i: e.i ?? k }));
   let dx = 0, dy = 0;
-  if (typeof body.statusBarHeight === "number") {
+  if (typeof offsetY === "number") {
+    dy = offsetY;
+  } else if (typeof body.statusBarHeight === "number") {
     dy = body.statusBarHeight; // Android: window coordinates start below the status bar
   } else {
     // Older probes: the largest root (the app's container) sitting above the window origin.
@@ -92,6 +95,28 @@ export function probeElements(body) {
   const shifted = !dx && !dy ? els : els.map((e) => ({ ...e, box: { ...e.box, x: e.box.x + dx, y: e.box.y + dy } }));
   shifted.insetTop = dy; // the status bar height above the window
   return shifted;
+}
+
+/**
+ * The vertical offset that lines the probe's boxes up with the screenshot. Android reports the
+ * status bar height even when the app hides it (then nothing is above the window), so both
+ * candidates are scored by how well each element's own background matches the pixels there.
+ */
+export function chooseOffsetY(body, img, scale) {
+  const sb = body.statusBarHeight;
+  if (typeof sb !== "number" || sb <= 0) return undefined;
+  const painted = (body.elements ?? []).filter((e) => e?.box && parseColor(e.bg)?.a >= 0.99 && e.box.w * e.box.h >= 400).slice(0, 60);
+  if (!painted.length) return undefined;
+  const score = (dy) => {
+    let total = 0;
+    for (const e of painted) {
+      const { bg } = sampleColors(img, { x: e.box.x + 2, y: e.box.y + dy + 2, w: Math.max(1, e.box.w - 4), h: Math.max(1, e.box.h - 4) }, scale);
+      total += bg ? Math.min(100, deltaE(parseColor(e.bg), bg)) : 100;
+    }
+    return total / painted.length;
+  };
+  const withBar = score(sb), without = score(0);
+  return without + 2 < withBar ? 0 : sb;
 }
 
 /** Captures the app's current screen through pen-probe, plus a device screenshot. */
@@ -111,7 +136,7 @@ export async function captureProbe({ platform, device, deepLink, settleMs = 2000
   const img = readPngBuffer(fs.readFileSync(screenshotPath));
   const w = body.window?.width ?? img.width;
   const scale = img.width / w;
-  const elements = probeElements(body);
+  const elements = probeElements(body, { offsetY: chooseOffsetY(body, img, scale) });
   return {
     snapshot: {
       version: 1,

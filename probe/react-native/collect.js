@@ -45,13 +45,16 @@ export function currentFiber(fiber) {
   while (top.return) top = top.return;
   const current = top.tag === 3 ? top.stateNode?.current : null; // HostRoot -> FiberRoot.current
   if (!current) return fiber;
-  // Walk up from the candidate: the current one ends at the root's current HostRoot fiber.
-  const reaches = (f) => {
-    let t = f;
-    while (t.return) t = t.return;
-    return t === current;
-  };
-  return reaches(fiber) ? fiber : fiber.alternate;
+  // Walk the current tree down (its child pointers are always consistent; a bailed-out subtree's
+  // .return may point at the alternate) and take whichever of the pair appears in it.
+  const stack = [current];
+  for (let guard = 0; stack.length && guard < 200_000; guard++) {
+    const f = stack.pop();
+    if (f === fiber || f === fiber.alternate) return f;
+    if (f.sibling) stack.push(f.sibling);
+    if (f.child) stack.push(f.child);
+  }
+  return fiber;
 }
 
 /** The object whose measureInWindow works: Fabric keeps it under canonical.publicInstance. */

@@ -165,3 +165,17 @@ test("probe: Android status bar height moves boxes to screen coordinates; oversi
   assert.ok(res.status === 413 || res.status === "ECONNRESET" || res.status === "reset" || res.status === "UND_ERR_SOCKET", `got ${res.status}`);
   assert.match(await pending, /No snapshot/);
 });
+
+test("probe: the status bar offset is checked against the screenshot (a hidden status bar means none)", async () => {
+  const { chooseOffsetY } = await import("../src/verify/adapters/probe.js");
+  // 100×200 logical at scale 1; a red header 40 tall drawn at y 0 (status bar hidden) or at y 24.
+  const draw = (top) => {
+    const im = blank(100, 200, [255, 255, 255]);
+    for (let y = top; y < top + 40; y++) for (let x = 0; x < 100; x++) im.data.set([220, 38, 38, 255], (y * 100 + x) * 4);
+    return im;
+  };
+  const body = { statusBarHeight: 24, elements: [{ box: { x: 0, y: 0, w: 100, h: 40 }, bg: "rgba(220, 38, 38, 1)" }, { box: { x: 0, y: 40, w: 100, h: 160 }, bg: "rgba(255, 255, 255, 1)" }] };
+  assert.equal(chooseOffsetY(body, draw(0), 1), 0, "hidden status bar: no offset");
+  assert.equal(chooseOffsetY(body, draw(24), 1), 24, "visible status bar: its height");
+  assert.equal(chooseOffsetY({ elements: body.elements }, draw(0), 1), undefined, "no status bar reported (iOS)");
+});

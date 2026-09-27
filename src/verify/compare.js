@@ -28,7 +28,7 @@ const where = (el) => el.selector ?? el.marker ?? el.tag ?? `element ${el.i}`;
  * Findings for one screen. `ui` is in design coordinates and has `elements` with `i`/`parent`.
  * `fields` lists which UI properties the source provides (others are not compared).
  */
-export function compare(design, ui, matched, { tolerance = {}, fields, viewportW } = {}) {
+export function compare(design, ui, matched, { tolerance = {}, fields, viewportW, viewportH } = {}) {
   const tol = { ...DEFAULT_TOLERANCE, ...tolerance };
   const has = (f) => !fields || fields.includes(f);
   const byIndex = new Map(ui.elements.map((el) => [el.i, el]));
@@ -67,11 +67,12 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
     const rest = extras.slice(8);
     add({ severity: "high", group: "Structure", kind: "extra", message: `extra: ${rest.length} more texts not in the design, from y ${Math.round(rest[0].box.y)} down: ${rest.slice(0, 12).map((el) => `"${String(el.text).trim().slice(0, 30)}"`).join(", ")}${rest.length > 12 ? ", …" : ""}. Is this screen showing old UI, or the wrong state/route?` });
   }
-  const orderIds = design.order.filter((id) => matched.pairs.has(id));
+  // Reading order on both sides (the design's layer order can be z-order in free layouts), with a
+  // tolerance so side-by-side sections a pixel apart are ordered left to right.
+  const reading = (box) => (a, b) => (Math.abs(box(a).y - box(b).y) <= tol.position ? box(a).x - box(b).x : box(a).y - box(b).y);
+  const orderIds = design.order.filter((id) => matched.pairs.has(id)).sort(reading((id) => byId.get(id).box));
   if (orderIds.length > 1) {
-    // Reading order with a tolerance: side-by-side sections a pixel apart are ordered left to right.
-    const at = (id) => matched.pairs.get(id).el.box;
-    const uiOrder = [...orderIds].sort((a, b) => (Math.abs(at(a).y - at(b).y) <= tol.position ? at(a).x - at(b).x : at(a).y - at(b).y));
+    const uiOrder = [...orderIds].sort(reading((id) => matched.pairs.get(id).el.box));
     if (uiOrder.some((id, k) => id !== orderIds[k])) {
       const name = (id) => byId.get(id)?.name ?? id;
       add({ severity: "high", group: "Structure", kind: "order", message: `order: sections run ${orderIds.map(name).join(" → ")} in the design but ${uiOrder.map(name).join(" → ")} in the UI.` });
@@ -96,13 +97,22 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
       add({ ...base, severity: "low", group: "Typography", kind: "case", message: `letter case: "${flat(el.text).slice(0, 40)}" in the UI, "${flat(node.text).slice(0, 40)}" in the design — ${who}.` });
     }
 
+    if (node.kind === "text" && el.truncated) {
+      add({ ...base, severity: "medium", group: "Layout", kind: "truncated", message: `truncated: the UI cuts "${String(node.text).slice(0, 50)}" (ellipsis or line clamp) — the design shows it whole; give it the design's width/lines — ${who}.` });
+    }
+
     // Layout. Text line boxes differ by platform, so texts compare their top-left (and width only when fixed).
     const d = node.box, u = el.box;
     const posTol = node.kind === "text" ? tol.position + 2 : tol.position;
     // Relative to the nearest matched ancestor: a child that moved with its parent is not reported again.
     const anc = (node.ancestors ?? []).map((id) => [byId.get(id), matched.pairs.get(id)]).find(([, p]) => p);
     const [ax, ay] = anc ? [anc[1].el.box.x - anc[0].box.x, anc[1].el.box.y - anc[0].box.y] : [0, 0];
-    const dy = u.y - d.y - ay;
+    // A fixed/sticky bar sits against the viewport; a design frame taller than the viewport draws
+    // it against the frame. Compare its distance from the bottom too.
+    const fh = design.frame.h, vh = viewportH ?? fh;
+    const dys = [u.y - d.y - ay];
+    if (el.fixed) dys.push(u.y + u.h - vh - (d.y + d.h - fh));
+    const dy = dys.reduce((best, v) => (Math.abs(v) < Math.abs(best) ? v : best));
     // Horizontally, a device wider or narrower than the frame keeps left-, right- or center-anchored
     // elements at the same margin, not the same x.
     const fw = design.frame.w, vw = viewportW ?? fw;

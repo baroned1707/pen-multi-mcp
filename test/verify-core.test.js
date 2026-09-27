@@ -347,14 +347,26 @@ test("a missing card hides missing texts: the folded finding keeps high severity
   assert.match(f.message, /"Important note"/);
 });
 
-test("pen-probe reads the current fiber, not the stale alternate", async () => {
+test("pen-probe reads the current fiber, not the stale alternate, even when a bailed-out parent points at the old tree", async () => {
   const { currentFiber } = await import("../probe/react-native/collect.js");
-  const hostRoot = { tag: 3 };
-  const fresh = { tag: 1, return: hostRoot };
-  const stale = { tag: 1, return: { tag: 3 }, alternate: fresh };
+  // Live tree: root -> wrapper -> probe(fresh). The old tree's wrapper was never cloned again
+  // (it bailed out), so the stale probe fiber's .return climbs to the OLD HostRoot.
+  const fiberRoot = {};
+  const liveRoot = { tag: 3, stateNode: fiberRoot };
+  const oldRoot = { tag: 3, stateNode: fiberRoot, alternate: liveRoot };
+  liveRoot.alternate = oldRoot;
+  fiberRoot.current = liveRoot;
+  const wrapper = { tag: 0, return: liveRoot };
+  liveRoot.child = wrapper;
+  const oldWrapper = { tag: 0, return: oldRoot };
+  const fresh = { tag: 1, return: wrapper };
+  const stale = { tag: 1, return: oldWrapper, alternate: fresh };
   fresh.alternate = stale;
-  hostRoot.stateNode = { current: hostRoot };
-  stale.return.stateNode = { current: hostRoot }; // the old tree's root points at the live one
+  wrapper.child = fresh;
   assert.equal(currentFiber(stale), fresh);
   assert.equal(currentFiber(fresh), fresh);
+  // A sibling subtree before it is walked too, without confusion.
+  const toast = { tag: 0, return: liveRoot, sibling: wrapper };
+  liveRoot.child = toast;
+  assert.equal(currentFiber(stale), fresh);
 });
