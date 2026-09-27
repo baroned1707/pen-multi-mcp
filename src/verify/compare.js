@@ -8,8 +8,8 @@ const SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
 const r1 = (v) => Math.round(v * 10) / 10;
 const box = (b) => `${r1(b.w)}×${r1(b.h)} @${r1(b.x)},${r1(b.y)}`;
 
-/** The color behind an element: its own background composited over its ancestors' (white page last). */
-export function effectiveBg(el, byIndex) {
+/** The color behind an element: its own background composited over its ancestors', then the page's. */
+export function effectiveBg(el, byIndex, page = { r: 255, g: 255, b: 255, a: 1 }) {
   const layers = [];
   for (let cur = el, guard = 0; cur && guard < 200; cur = cur.parent !== undefined ? byIndex.get(cur.parent) : null, guard++) {
     const c = parseColor(cur.bg);
@@ -18,8 +18,7 @@ export function effectiveBg(el, byIndex) {
       if (c.a >= 0.999) break;
     }
   }
-  if (!layers.length) return null;
-  return layers.reduceRight((under, c) => flatten(c, under), { r: 255, g: 255, b: 255, a: 1 });
+  return layers.reduceRight((under, c) => flatten(c, under), page);
 }
 
 const label = (node) => `${node.address ?? node.name} (${node.id}${node.component ? `, ← ${node.component}` : ""})`;
@@ -33,6 +32,8 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
   const tol = { ...DEFAULT_TOLERANCE, ...tolerance };
   const has = (f) => !fields || fields.includes(f);
   const byIndex = new Map(ui.elements.map((el) => [el.i, el]));
+  const byId = new Map(design.nodes.map((n) => [n.id, n]));
+  const page = flatten(parseColor(ui.pageBg)?.a > 0 ? parseColor(ui.pageBg) : null) ?? { r: 255, g: 255, b: 255, a: 1 };
   const findings = [];
   const add = (f) => findings.push(f);
 
@@ -49,9 +50,10 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
       add({ severity: "low", group: "Structure", kind: "group", designId: node.id, address: node.address, box: node.box, message: `no element groups ${node.kind} "${node.name}" — ${label(node)}${inside.length ? `; its ${inside.length} compared nodes are all present` : " (it paints nothing)"}.` });
       continue;
     }
-    const sev = node.kind === "box" ? "medium" : "high";
-    const what = node.kind === "text" ? `text "${String(node.text).slice(0, 60)}"` : `${node.kind} "${node.name}"`;
     const lost = matched.unmatchedDesign.filter((n) => n.ancestors?.includes(node.id));
+    // As severe as the most important thing missing with it (a missing card hides missing texts).
+    const sev = node.kind === "box" && lost.every((n) => n.kind === "box") ? "medium" : "high";
+    const what = node.kind === "text" ? `text "${String(node.text).slice(0, 60)}"` : `${node.kind} "${node.name}"`;
     const texts = lost.filter((n) => n.kind === "text").map((n) => `"${String(n.text).slice(0, 30)}"`);
     const contents = lost.length ? ` Its ${lost.length} compared descendants are missing too${texts.length ? `, including the texts ${texts.slice(0, 6).join(", ")}${texts.length > 6 ? ", …" : ""}` : ""}.` : "";
     add({ severity: sev, group: "Structure", kind: "missing", designId: node.id, address: node.address, box: node.box, contains: lost.map((n) => n.id), message: `missing: ${what} — ${label(node)} at ${box(node.box)} has no counterpart in the UI${node.kind === "text" ? " (no element shows this text)" : ""}.${contents}` });
@@ -67,9 +69,11 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
   }
   const orderIds = design.order.filter((id) => matched.pairs.has(id));
   if (orderIds.length > 1) {
-    const uiOrder = [...orderIds].sort((a, b) => matched.pairs.get(a).el.box.y - matched.pairs.get(b).el.box.y);
+    // Reading order with a tolerance: side-by-side sections a pixel apart are ordered left to right.
+    const at = (id) => matched.pairs.get(id).el.box;
+    const uiOrder = [...orderIds].sort((a, b) => (Math.abs(at(a).y - at(b).y) <= tol.position ? at(a).x - at(b).x : at(a).y - at(b).y));
     if (uiOrder.some((id, k) => id !== orderIds[k])) {
-      const name = (id) => design.nodes.find((n) => n.id === id)?.name ?? id;
+      const name = (id) => byId.get(id)?.name ?? id;
       add({ severity: "high", group: "Structure", kind: "order", message: `order: sections run ${orderIds.map(name).join(" → ")} in the design but ${uiOrder.map(name).join(" → ")} in the UI.` });
     }
   }
@@ -96,7 +100,7 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
     const d = node.box, u = el.box;
     const posTol = node.kind === "text" ? tol.position + 2 : tol.position;
     // Relative to the nearest matched ancestor: a child that moved with its parent is not reported again.
-    const anc = (node.ancestors ?? []).map((id) => [design.nodes.find((n) => n.id === id), matched.pairs.get(id)]).find(([, p]) => p);
+    const anc = (node.ancestors ?? []).map((id) => [byId.get(id), matched.pairs.get(id)]).find(([, p]) => p);
     const [ax, ay] = anc ? [anc[1].el.box.x - anc[0].box.x, anc[1].el.box.y - anc[0].box.y] : [0, 0];
     const dy = u.y - d.y - ay;
     // Horizontally, a device wider or narrower than the frame keeps left-, right- or center-anchored
@@ -123,9 +127,9 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
 
     // Color.
     if (node.fill && has("bg")) {
-      const bg = effectiveBg(el, byIndex);
-      const de = bg ? deltaE(node.fill, bg) : Infinity;
-      if (de > tol.color) add({ ...base, severity: "medium", group: "Color", kind: "fill", message: `fill: ${bg ? toHex(bg) : "none"} in the UI, ${toHex(node.fill)} in the design${bg ? ` (ΔE ${r1(de)})` : ""} — ${who}.` });
+      const bg = effectiveBg(el, byIndex, page);
+      const de = deltaE(node.fill, bg);
+      if (de > tol.color) add({ ...base, severity: "medium", group: "Color", kind: "fill", message: `fill: ${toHex(bg)} in the UI, ${toHex(node.fill)} in the design (ΔE ${r1(de)}) — ${who}.` });
     }
     if (node.color && has("fg")) {
       const fg = parseColor(el.fg);

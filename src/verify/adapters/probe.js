@@ -32,7 +32,16 @@ export function receiveSnapshot({ port = PROBE_PORT, timeoutMs = 20_000 } = {}) 
       }
       if (req.method === "POST" && req.url.startsWith("/pen-probe/snapshot")) {
         const chunks = [];
-        req.on("data", (c) => chunks.push(c));
+        let size = 0;
+        req.on("data", (c) => {
+          size += c.length;
+          if (size > 50 * 1024 * 1024) {
+            res.writeHead(413).end();
+            req.destroy();
+            return;
+          }
+          chunks.push(c);
+        });
         req.on("end", () => {
           let body;
           try {
@@ -71,9 +80,15 @@ export function receiveSnapshot({ port = PROBE_PORT, timeoutMs = 20_000 } = {}) 
 export function probeElements(body) {
   if (!Array.isArray(body?.elements)) throw new Error("pen-probe posted no elements");
   const els = body.elements.filter((e) => e && e.box && e.box.w > 0 && e.box.h > 0).map((e, k) => ({ ...e, i: e.i ?? k }));
-  const roots = els.filter((e) => e.parent === undefined || e.parent === null);
-  const dx = Math.max(0, -Math.min(0, ...roots.map((e) => e.box.x)));
-  const dy = Math.max(0, -Math.min(0, ...roots.map((e) => e.box.y)));
+  let dx = 0, dy = 0;
+  if (typeof body.statusBarHeight === "number") {
+    dy = body.statusBarHeight; // Android: window coordinates start below the status bar
+  } else {
+    // Older probes: the largest root (the app's container) sitting above the window origin.
+    const roots = els.filter((e) => e.parent === undefined || e.parent === null);
+    const main = roots.sort((a, b) => b.box.w * b.box.h - a.box.w * a.box.h)[0];
+    if (main) (dx = Math.max(0, -main.box.x)), (dy = Math.max(0, -main.box.y));
+  }
   const shifted = !dx && !dy ? els : els.map((e) => ({ ...e, box: { ...e.box, x: e.box.x + dx, y: e.box.y + dy } }));
   shifted.insetTop = dy; // the status bar height above the window
   return shifted;

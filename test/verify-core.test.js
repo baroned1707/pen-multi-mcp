@@ -312,3 +312,49 @@ test("phone chrome drawn in a mockup is not compared", async () => {
   assert.deepEqual(d.nodes.map((x) => x.id), ["t"]);
   assert.deepEqual(d.deviceChrome.map((c) => c.name), ["Status bar"]);
 });
+
+test("order: sections side by side a pixel apart keep their left-to-right order", () => {
+  const d = design();
+  d.nodes.find((n) => n.id === "list").box = { x: 0, y: 72, w: 180, h: 144 };
+  d.nodes.find((n) => n.id === "pay").box = { x: 200, y: 72, w: 174, h: 48 };
+  d.nodes.find((n) => n.id === "payl").box = { x: 250, y: 86, w: 70, h: 20 };
+  const ui = faithfulUi();
+  ui.elements[2].box = { x: 0, y: 73, w: 180, h: 144 };
+  ui.elements[6].box = { x: 200, y: 72, w: 174, h: 48 };
+  ui.elements[7].box = { x: 251, y: 86, w: 68, h: 19 };
+  const { findings } = run(d, ui);
+  assert.ok(!findings.some((f) => f.kind === "order"));
+});
+
+test("a transparent UI container over the page background counts as the page's color", () => {
+  const d = design();
+  d.nodes.find((n) => n.id === "list").fill = parseColor("#FAFAFA");
+  const ui = faithfulUi();
+  ui.pageBg = "rgb(250, 250, 250)";
+  const m = match(d, ui);
+  assert.ok(!compare(d, ui, m, { fields: FIELDS }).some((f) => f.kind === "fill"));
+  ui.pageBg = undefined;
+  assert.ok(!compare(d, ui, match(d, ui), { fields: FIELDS }).some((f) => f.kind === "fill"), "#FAFAFA vs default white is within ΔE");
+});
+
+test("a missing card hides missing texts: the folded finding keeps high severity", () => {
+  const d = design();
+  d.nodes.push(node("card", "box", { x: 0, y: 400, w: 390, h: 100 }, { name: "Card", fill: parseColor("#EEEEEE") }));
+  d.nodes.push(node("ct", "text", { x: 16, y: 420, w: 100, h: 20 }, { name: "Note", text: "Important note", ancestors: ["card"], color: parseColor("#111111"), fontSize: 14, fontWeight: 400 }));
+  const { findings } = run(d, faithfulUi());
+  const f = findings.find((x) => x.designId === "card");
+  assert.equal(f.severity, "high");
+  assert.match(f.message, /"Important note"/);
+});
+
+test("pen-probe reads the current fiber, not the stale alternate", async () => {
+  const { currentFiber } = await import("../probe/react-native/collect.js");
+  const hostRoot = { tag: 3 };
+  const fresh = { tag: 1, return: hostRoot };
+  const stale = { tag: 1, return: { tag: 3 }, alternate: fresh };
+  fresh.alternate = stale;
+  hostRoot.stateNode = { current: hostRoot };
+  stale.return.stateNode = { current: hostRoot }; // the old tree's root points at the live one
+  assert.equal(currentFiber(stale), fresh);
+  assert.equal(currentFiber(fresh), fresh);
+});

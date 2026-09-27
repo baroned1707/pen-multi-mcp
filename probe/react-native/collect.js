@@ -34,6 +34,26 @@ function textBelow(fiber) {
   return out;
 }
 
+/**
+ * The fiber currently on screen for a class component instance. React sets `_reactInternals` once;
+ * after each commit through the component the current fiber alternates between it and its
+ * `alternate`, so read from the root's current tree: whichever of the two is reachable from it.
+ */
+export function currentFiber(fiber) {
+  if (!fiber?.alternate) return fiber;
+  let top = fiber;
+  while (top.return) top = top.return;
+  const current = top.tag === 3 ? top.stateNode?.current : null; // HostRoot -> FiberRoot.current
+  if (!current) return fiber;
+  // Walk up from the candidate: the current one ends at the root's current HostRoot fiber.
+  const reaches = (f) => {
+    let t = f;
+    while (t.return) t = t.return;
+    return t === current;
+  };
+  return reaches(fiber) ? fiber : fiber.alternate;
+}
+
 /** The object whose measureInWindow works: Fabric keeps it under canonical.publicInstance. */
 export const publicInstance = (stateNode) => stateNode?.canonical?.publicInstance ?? stateNode?.canonical ?? stateNode;
 
@@ -96,7 +116,7 @@ const measure = (view, timeoutMs, fallback) =>
 
 /** Snapshot elements: measured boxes plus colors, typography, radius and borders from style. */
 export async function snapshotElements(rootFiber, { flatten, processColor, measureFallback, timeoutMs = 2000 } = {}) {
-  const views = hostViews(rootFiber, { flatten });
+  const views = hostViews(currentFiber(rootFiber), { flatten });
   const boxes = await Promise.all(views.map((v) => measure(v, timeoutMs, measureFallback)));
   const color = (c) => (c === undefined || c === null ? undefined : colorString(processColor ? processColor(c) : c));
   const kept = new Map();

@@ -31,7 +31,8 @@ const XML = `<hierarchy rotation="0"><node class="android.widget.FrameLayout" bo
 process.env.PEN_MULTI_ADB = script(
   "adb",
   `const a = args.filter((x, k) => !(x === "-s" || args[k - 1] === "-s"));
-if (a[0] === "exec-out" && a[1] === "cat") process.stdout.write(${JSON.stringify(XML)});
+if (a[0] === "shell" && a[1] === "uiautomator") process.stdout.write(process.env.FAKE_DUMP_FAIL ? "ERROR: could not get idle state.\\n" : "UI hierchary dumped to: " + a[3] + "\\n");
+else if (a[0] === "exec-out" && a[1] === "cat") process.stdout.write(${JSON.stringify(XML)});
 else if (a[0] === "exec-out" && a[1] === "screencap") process.stdout.write(fs.readFileSync(${JSON.stringify(shot)}));
 else if (a[0] === "shell" && a[1] === "wm") process.stdout.write("Physical density: 480\\nOverride density: 420\\n");`,
 );
@@ -137,4 +138,30 @@ test("probe boxes from an edge-to-edge window (root above the window origin) are
   assert.deepEqual(els.map((e) => e.box.y), [0, 40]);
   const plain = probeElements({ elements: [{ box: { x: 0, y: 24, w: 411, h: 890 } }] });
   assert.equal(plain[0].box.y, 24, "a window that starts at the screen top keeps its offsets");
+});
+
+test("android: a failed uiautomator dump is an error, not the previous screen", async () => {
+  process.env.FAKE_DUMP_FAIL = "1";
+  try {
+    await assert.rejects(captureNative({ platform: "android", screenshotPath: path.join(dir, "f.png") }), /uiautomator dump failed: ERROR: could not get idle state/);
+    assert.ok(calls().some((c) => /shell rm -f \/sdcard\/pen-ui-/.test(c)), "the remote file is removed either way");
+  } finally {
+    delete process.env.FAKE_DUMP_FAIL;
+  }
+});
+
+test("probe: Android status bar height moves boxes to screen coordinates; oversized posts are refused", async () => {
+  const { probeElements } = await import("../src/verify/adapters/probe.js");
+  const els = probeElements({ statusBarHeight: 48.76, elements: [{ box: { x: 0, y: -48.76, w: 411, h: 914 } }, { parent: 0, box: { x: 0, y: 0, w: 411, h: 56 } }] });
+  assert.ok(Math.abs(els[0].box.y) < 0.01);
+  assert.ok(Math.abs(els[1].box.y - 48.76) < 0.01);
+  assert.equal(els.insetTop, 48.76);
+  const toast = probeElements({ elements: [{ box: { x: 0, y: 0, w: 411, h: 914 } }, { box: { x: 0, y: -120, w: 411, h: 60 } }] });
+  assert.equal(toast[0].box.y, 0, "a small root hidden above the screen does not shift the app");
+  const port = 17359;
+  const pending = receiveSnapshot({ port, timeoutMs: 3000 }).catch((e) => e.message);
+  await new Promise((r) => setTimeout(r, 100));
+  const res = await fetch(`http://127.0.0.1:${port}/pen-probe/snapshot`, { method: "POST", body: "x".repeat(51 * 1024 * 1024) }).catch((e) => ({ status: e.cause?.code ?? "reset" }));
+  assert.ok(res.status === 413 || res.status === "ECONNRESET" || res.status === "reset" || res.status === "UND_ERR_SOCKET", `got ${res.status}`);
+  assert.match(await pending, /No snapshot/);
 });

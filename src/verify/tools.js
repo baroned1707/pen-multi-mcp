@@ -8,7 +8,7 @@ import { captureNative } from "./adapters/native.js";
 import { captureProbe } from "./adapters/probe.js";
 import { captureWeb } from "./adapters/web.js";
 import { designNodes } from "./design.js";
-import { pngBuffer, readPng, writePng } from "./image.js";
+import { pngBuffer, readPng, resize, writePng } from "./image.js";
 import { verifyScreen } from "./pipeline.js";
 import { contactSheet, renderReport, sheetRow } from "./report.js";
 
@@ -58,7 +58,8 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
     } else if (src.kind === "probe") {
       ({ snapshot } = await withMachineLock("pen-probe", () => captureProbe({ ...src, screenshotPath })));
     } else if (src.kind === "native") {
-      ({ snapshot } = await captureNative({ ...src, screenshotPath }));
+      // One capture per device at a time: dumps and screenshots of two agents must not interleave.
+      ({ snapshot } = await withMachineLock(`device:${src.platform}:${src.device ?? "default"}`, () => captureNative({ ...src, screenshotPath })));
     } else {
       if (!src.path) throw new ReadError("source.path is required for kind image");
       const file = path.resolve(process.cwd(), src.path);
@@ -99,8 +100,11 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
 
   /** The frame to verify: the target, or its sibling cell for another width/theme. */
   async function pickFrame(target, wanted, { width, theme }) {
-    const resolved = await design.resolveTarget(target, wanted);
+    let resolved = await design.resolveTarget(target, wanted);
+    // An id resolves without the document analysis unless it is cached; width/theme need the row.
+    if ((width || theme) && !resolved.frame) resolved = await design.resolveTarget(target, wanted, { refreshed: true });
     let { id, frame } = resolved;
+    if ((width || theme) && !frame?.row) throw new ReadError(`${wanted} is not a screen frame, so width/theme cannot pick a variant; pass the screen's name or frame id, or leave width/theme out.`);
     if (frame?.row && (width || theme)) {
       const cells = Object.entries(frame.row.cells).flatMap(([w, cs]) => cs.map((c) => ({ ...c, width: Number(w) || w })));
       const fits = cells.filter((c) => (!width || String(c.width) === String(width)) && (!theme || String(c.theme ?? "").toLowerCase() === String(theme).toLowerCase()));
@@ -153,7 +157,9 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       const d = designNodes(model);
       const name = slug([model.root.name ?? id, width, theme].filter(Boolean).join("-"));
       const outBase = path.join(process.cwd(), OUT_DIR, name);
-      const designPng = await renderDesign(run, id, path.join(process.cwd(), OUT_DIR, ".render"));
+      // Per .pen file: forks share node ids, and two agents may verify both at once.
+      const renderDir = path.join(process.cwd(), OUT_DIR, ".render", createHash("sha1").update(target.file).digest("hex").slice(0, 10));
+      const designPng = await renderDesign(run, id, renderDir);
 
       let snapshot, snapshotPath;
       if (snapPath) {
@@ -218,7 +224,8 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
           lines.push(`- ${p}: skipped (its design render or screenshot is gone; re-run verify)`);
           continue;
         }
-        rows.push(sheetRow({ designImg: readPng(rep.files.designRender), uiImg: readPng(shot), frame: { w: rep.target.width }, findings: rep.findings, uiWidth: rep.uiWidth }));
+        const row = sheetRow({ designImg: readPng(rep.files.designRender), uiImg: readPng(shot), frame: { w: rep.target.width }, findings: rep.findings, uiWidth: rep.uiWidth });
+        rows.push(row.width > 2400 ? resize(row, 2400) : row); // bounded before stacking up to 40 rows
         lines.push(`- row ${rows.length}: ${rep.meta?.screen} — ${rep.summary.verdict === "match" ? "MATCH" : `${rep.summary.high} high, ${rep.summary.medium} medium, ${rep.summary.low} low`}`);
       }
       if (!rows.length) throw new ReadError(`Nothing to draw:\n${lines.join("\n")}`);

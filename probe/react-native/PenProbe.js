@@ -8,7 +8,7 @@
 // http://<host>:<port>/pen-probe/next every 1.5 s; pen-multi only listens there during a capture,
 // so the polls fail silently the rest of the time. Mark views with testID="pen:<layer address>".
 import React from "react";
-import { Dimensions, PixelRatio, StyleSheet, UIManager, processColor } from "react-native";
+import { Dimensions, PixelRatio, Platform, StatusBar, StyleSheet, UIManager, processColor } from "react-native";
 import { snapshotElements } from "./collect";
 
 /** Measures a Fabric view that has no public instance yet, or a Paper view by its tag. */
@@ -56,7 +56,15 @@ export class PenProbe extends React.Component {
       await fetch(`${this.base}/snapshot`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id, window: { width, height, scale: PixelRatio.get() }, elements }),
+        // Android's measureInWindow is relative to the area below the status bar; pen-multi adds it back.
+        body: JSON.stringify({
+          id,
+          platform: Platform.OS,
+          window: { width, height, scale: PixelRatio.get() },
+          screen: Dimensions.get("screen"),
+          statusBarHeight: Platform.OS === "android" ? StatusBar.currentHeight : undefined,
+          elements,
+        }),
       });
     } catch {
       // pen-multi is not capturing right now

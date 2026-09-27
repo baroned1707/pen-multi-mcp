@@ -115,8 +115,18 @@ async function android({ device, deepLink, settleMs }, screenshotPath) {
     await run(bin.adb(), [...dev, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", deepLink]);
     await sleep(settleMs);
   }
-  await run(bin.adb(), [...dev, "shell", "uiautomator", "dump", "/sdcard/pen-ui.xml"]);
-  const xml = await run(bin.adb(), [...dev, "exec-out", "cat", "/sdcard/pen-ui.xml"]);
+  // A fresh file per capture: a failed dump ("could not get idle state" while animating) must not
+  // leave the previous screen's XML to be read as this one.
+  const remote = `/sdcard/pen-ui-${process.pid}-${Date.now()}.xml`;
+  let xml;
+  try {
+    const out = await run(bin.adb(), [...dev, "shell", "uiautomator", "dump", remote]);
+    if (!/dumped to/i.test(out)) throw new Error(`uiautomator dump failed: ${out.trim().slice(0, 200) || "no output"} (is the screen still animating? retry with settleMs)`);
+    xml = await run(bin.adb(), [...dev, "exec-out", "cat", remote]);
+  } finally {
+    await run(bin.adb(), [...dev, "shell", "rm", "-f", remote]).catch(() => {});
+  }
+  if (!/<hierarchy/.test(xml)) throw new Error(`uiautomator returned no hierarchy: ${xml.slice(0, 200)}`);
   const png = await run(bin.adb(), [...dev, "exec-out", "screencap", "-p"], { binary: true });
   const densityOut = await run(bin.adb(), [...dev, "shell", "wm", "density"]);
   const densities = [...densityOut.matchAll(/density:\s*(\d+)/gi)].map((m) => Number(m[1]));

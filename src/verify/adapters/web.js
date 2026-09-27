@@ -46,18 +46,44 @@ function collect(limit) {
     for (let cur = el; cur && cur !== document.body && parts.length < 4; cur = cur.parentElement) parts.unshift(selector(cur));
     return parts.join(" > ");
   };
+  // The part of an element's box not clipped away by ancestors with overflow other than visible.
+  const clipped = (el, r) => {
+    let x1 = r.left, y1 = r.top, x2 = r.right, y2 = r.bottom;
+    for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) {
+      const ps = getComputedStyle(p);
+      if (ps.overflowX === "visible" && ps.overflowY === "visible") continue;
+      const pr = p.getBoundingClientRect();
+      if (ps.overflowX !== "visible") (x1 = Math.max(x1, pr.left)), (x2 = Math.min(x2, pr.right));
+      if (ps.overflowY !== "visible") (y1 = Math.max(y1, pr.top)), (y2 = Math.min(y2, pr.bottom));
+      if (x2 <= x1 || y2 <= y1) return true;
+    }
+    return false;
+  };
+  // A paragraph with inline children (links, <strong>, <br>) is one text, as the design has it.
+  const INLINE = /^(inline|contents)/;
+  const phrasing = (el) => [...el.children].every((c) => INLINE.test(getComputedStyle(c).display) && phrasing(c));
+  const owned = new Set(); // elements whose text belongs to an ancestor's paragraph
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
   for (let el = document.body; el && out.length < limit; el = walker.nextNode()) {
     const cs = getComputedStyle(el);
-    if (cs.display === "none" || cs.visibility === "hidden" || cs.visibility === "collapse" || Number(cs.opacity) === 0) continue;
+    if (cs.display === "none") continue;
+    // checkVisibility covers hidden or transparent ancestors, content-visibility and closed <details>.
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) continue;
+    if (!el.checkVisibility && (cs.visibility !== "visible" || Number(cs.opacity) === 0)) continue;
     const r = el.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0) continue;
+    if (r.width <= 0 || r.height <= 0 || clipped(el, r)) continue;
     let text = "";
-    for (const c of el.childNodes) if (c.nodeType === Node.TEXT_NODE) text += c.textContent;
     if (/^(INPUT|TEXTAREA)$/.test(el.tagName)) text = el.value || el.placeholder || "";
+    else if (!owned.has(el)) {
+      let own = "";
+      for (const c of el.childNodes) if (c.nodeType === Node.TEXT_NODE) own += c.textContent;
+      if (el.children.length && phrasing(el) && (own.trim() || el.children.length > 1) && el.innerText?.trim()) {
+        // innerText applies text-transform and turns <br> into a break; collapse to one line.
+        text = el.innerText;
+        for (const d of el.querySelectorAll("*")) owned.add(d);
+      } else if (own.trim()) text = el.children.length === 0 && el.innerText ? el.innerText : own;
+    }
     text = text.replace(/\s+/g, " ").trim();
-    // innerText applies text-transform; prefer it for a leaf so letter case matches what is shown.
-    if (text && el.children.length === 0 && el.innerText) text = el.innerText.replace(/\s+/g, " ").trim();
     let parent;
     for (let p = el.parentElement; p; p = p.parentElement) if (index.has(p)) {
       parent = index.get(p);
@@ -86,7 +112,9 @@ function collect(limit) {
     index.set(el, o.i);
     out.push(o);
   }
-  return { elements: out, truncated: out.length >= limit, scroll: { w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight } };
+  const bodyBg = getComputedStyle(document.body).backgroundColor;
+  const pageBg = /^rgba\(0, 0, 0, 0\)$|^transparent$/.test(bodyBg) ? getComputedStyle(document.documentElement).backgroundColor : bodyBg;
+  return { elements: out, pageBg, truncated: out.length >= limit, scroll: { w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight } };
 }
 
 async function runStep(page, step) {
@@ -130,6 +158,7 @@ export async function captureWeb({ url, steps = [], fullPage = true, width, heig
         screenshot: screenshotPath,
         fields: WEB_FIELDS,
         truncated: data.truncated || undefined,
+        pageBg: data.pageBg,
         pageErrors: errors.length ? errors.slice(0, 5) : undefined,
         elements: data.elements,
       },

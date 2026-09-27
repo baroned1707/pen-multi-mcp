@@ -36,7 +36,7 @@ Agents port a design, look at a screenshot, and declare it done. In trading-agen
 | `native` | `platform: ios\|android`, `device?`, `deepLink?` | Android: `adb uiautomator dump`; iOS: `maestro hierarchy`; colors sampled from the screenshot | boxes, text, ids; sampled colors |
 | `image` | `path`, `width` (logical width of the screenshot) | the PNG only | pixel regions only |
 
-Browser: Playwright's own Chromium if installed, else Chrome (`channel: "chrome"`), else `PEN_MULTI_BROWSER` path; always headless. Viewport = design frame width × (`height` or frame height, capped at 1000), `colorScheme` from the theme name when it is light/dark-like.
+Browser: Playwright's own Chromium if installed, else Chrome (`channel: "chrome"`), else `PEN_MULTI_BROWSER` path; always headless. Viewport = design frame width × (`height` or frame height, capped at 1080), `colorScheme` from the theme name when it is light/dark-like.
 
 ## UI snapshot
 

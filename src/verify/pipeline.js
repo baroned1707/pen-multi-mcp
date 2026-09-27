@@ -12,7 +12,7 @@ const FIELD_NAMES = { text: "text", bg: "fill color", fg: "text color", fontSize
  * (see compare), and fixed sizes such as font sizes stay comparable.
  */
 export function toDesignUnits(snapshot) {
-  return { s: 1, viewportW: snapshot.viewport?.w, elements: (snapshot.elements ?? []).map((el) => ({ ...el, box: { ...el.box } })) };
+  return { s: 1, viewportW: snapshot.viewport?.w, pageBg: snapshot.pageBg, elements: (snapshot.elements ?? []).map((el) => ({ ...el, box: { ...el.box } })) };
 }
 
 /**
@@ -33,6 +33,15 @@ export function verifyScreen({ design, snapshot, designImg, uiImg, tolerance }) 
     const chromeBoxes = (design.deviceChrome ?? []).map((c) => c.box);
     if (snapshot.insets?.top) chromeBoxes.push({ x: 0, y: 0, w: design.frame.w, h: snapshot.insets.top }); // the device's own status bar
     const ignore = [...chromeBoxes, ...(imageOnly ? [] : design.nodes.filter((n) => n.kind === "text" && matched.pairs.has(n.id)).map((n) => n.box))];
+    // A device wider or narrower than the frame shifts right- and center-anchored elements that the
+    // element comparison accepted; their pixels (at both places) are not differences.
+    if (!imageOnly && ui.viewportW && Math.abs(ui.viewportW - design.frame.w) > 2) {
+      const flaggedIds = new Set(findings.filter((f) => f.designId).map((f) => f.designId));
+      for (const [id, p] of matched.pairs) {
+        if (flaggedIds.has(id)) continue;
+        ignore.push(design.nodes.find((n) => n.id === id).box, p.el.box);
+      }
+    }
     const opts = imageOnly ? { cell: 8, threshold: 12 } : { cell: 12, threshold: 15, minCells: 3 };
     const { regions, differentHeight } = pixelRegions(designImg, design.frame, uiImg, { ...opts, ignore, max: Infinity, uiWidth: snapshot.viewport?.w });
     const flagged = new Set(findings.filter((f) => f.designId).flatMap((f) => [f.designId, ...(f.contains ?? [])]));

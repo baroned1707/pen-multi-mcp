@@ -134,3 +134,22 @@ test("capture summarizes a page; an unknown variant lists the screen's variants"
   const none = await call(client, "verify", { filePath: file, target: "Checkout · light" });
   assert.match(text(none), /Pass source/);
 });
+
+test("web capture skips hidden and clipped text and keeps inline paragraphs whole", async () => {
+  fs.writeFileSync(
+    path.join(dir, "vis.html"),
+    `<body style="margin:0"><div style="opacity:0"><span>Hidden text</span></div><div style="height:0;overflow:hidden"><span>Collapsed</span></div>
+     <p>Line1<br>Line2</p><p>Agree to <a href="#">Terms</a> now</p><details><summary>More</summary><p>Inside</p></details><button>Pay <b>now</b></button></body>`,
+  );
+  const cap = await call(client, "capture", { source: { kind: "web", url: url("vis.html") }, savePath: "vis-capture" });
+  assert.ok(!cap.isError, text(cap));
+  const snap = JSON.parse(fs.readFileSync(path.join(dir, "vis-capture.json"), "utf8"));
+  assert.deepEqual(snap.elements.filter((e) => e.text).map((e) => e.text), ["Line1 Line2", "Agree to Terms now", "More", "Pay now"]);
+});
+
+test("a frame id with a theme that has no variant is an error, not a silent comparison of the wrong frame", async () => {
+  const id = report().target.id;
+  const res = await call(client, "verify", { filePath: file, target: id, theme: "dark", source: { kind: "web", url: url("faithful.html") } });
+  assert.equal(res.isError, true);
+  assert.match(text(res), /no frame for theme dark/);
+});

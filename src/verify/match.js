@@ -89,12 +89,15 @@ export function match(design, ui) {
   }
 
   // 2. Equal text, closest pairs first.
-  const texts = ui.elements.filter((el) => el.text && normText(el.text));
+  const byText = new Map();
+  for (const el of ui.elements) {
+    const t = el.text && normText(el.text);
+    if (t) byText.set(t, [...(byText.get(t) ?? []), el]);
+  }
   const candidates = [];
   for (const node of design.nodes) {
     if (node.kind !== "text" || pairs.has(node.id)) continue;
-    const want = normText(node.text);
-    for (const el of texts) if (!usedUi.has(el.i) && normText(el.text) === want) candidates.push({ node, el, d: dist(node.box, el.box) });
+    for (const el of byText.get(normText(node.text)) ?? []) if (!usedUi.has(el.i)) candidates.push({ node, el, d: dist(node.box, el.box) });
   }
   candidates.sort((a, b) => a.d - b.d);
   for (const c of candidates) if (!pairs.has(c.node.id) && !usedUi.has(c.el.i)) take(c.node, c.el, "text");
