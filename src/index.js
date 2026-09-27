@@ -548,7 +548,7 @@ tool(
       : { running: false };
     return ok(
       JSON.stringify(
-        { sessions, machineWide, desktopApp, limits, timings: timings.summary(), pendingSaves: saver.pending(), saveErrors: saver.errors() },
+        { sessions, machineWide, desktopApp, limits, prewarm: Object.fromEntries(pool.prewarmResults), timings: timings.summary(), pendingSaves: saver.pending(), saveErrors: saver.errors() },
         null,
         2,
       ),

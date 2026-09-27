@@ -66,7 +66,10 @@ const readJson = (file) => {
   }
 };
 
-const describeHolder = (h) => `${h.file} (agent in ${h.cwd ?? "unknown project"}, pid ${h.pid}, since ${h.since})`;
+const describeHolder = (h) =>
+  h.file?.startsWith("warm:")
+    ? `${h.file.slice(5)} (pre-warmed, not in use yet, by the agent in ${h.cwd ?? "unknown project"}, pid ${h.pid})`
+    : `${h.file} (agent in ${h.cwd ?? "unknown project"}, pid ${h.pid}, since ${h.since})`;
 
 // Cross-process lock: every agent session runs its own pen-multi-mcp process,
 // so two of them must not hold editors on the same file.
@@ -97,6 +100,11 @@ export class FileLock {
           `Wait for it to finish, or fork_version to a new path and work on the copy.`,
       );
     }
+  }
+
+  /** True while this process holds the lock (another process may reclaim a warm marker). */
+  held() {
+    return readJson(this.path).pid === process.pid;
   }
 
   release() {
@@ -173,6 +181,8 @@ export class SessionPool {
     this.pending = new Map();
     // file -> an editor started ahead of use, without the file lock (see prewarm).
     this.warm = new Map();
+    this.prewarmResults = new Map(); // file -> what pre-warm did, for list_sessions
+    this.closed = false;
     // file -> number of tool calls using it. Counted from the moment a call arrives, before its
     // file is even open, so a file can never be evicted between being opened and being used.
     this.inUse = new Map();
@@ -245,6 +255,7 @@ export class SessionPool {
       new FileLock(file).assertNotHeldElsewhere(); // fail fast, before waiting for a slot
       if (warm && source === file && (await warm.ready) && !warm.shell.stopped && statKey(file) === warm.stat) {
         warm.marker.release(); // its slot passes to the session below
+        warm.adopted = true;
         shell = warm.shell;
       }
     } finally {
@@ -257,6 +268,12 @@ export class SessionPool {
     } catch (err) {
       shell?.kill(); // an adopted warm editor would otherwise outlive the failed open
       throw err;
+    }
+    if (shell && statKey(file) !== warm.stat) {
+      // Another agent saved the file while this call waited for a slot: load it afresh.
+      shell.kill();
+      shell = undefined;
+      session.shell = new PenShell({ inPath: source, outPath: file });
     }
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -282,21 +299,37 @@ export class SessionPool {
    * processes), never the file lock, so it blocks no one. Returns whether an editor was started.
    */
   async prewarm(file) {
-    if (!config.prewarm || !fs.existsSync(file)) return false;
-    if (this.sessions.has(file) || this.pending.has(file) || this.warm.has(file)) return false;
-    if (this.sessions.size >= config.maxSessions || FileLock.live().length >= config.globalMaxSessions) return false;
+    const result = await this.#prewarm(file);
+    this.prewarmResults.set(file, result);
+    return result === "warm";
+  }
+
+  async #prewarm(file) {
+    if (!config.prewarm) return "off";
+    if (this.closed) return "skipped: shutting down";
+    if (!fs.existsSync(file)) return "skipped: file does not exist";
+    if (this.sessions.has(file) || this.pending.has(file) || this.warm.has(file)) return "skipped: already open";
+    if (this.sessions.size + this.warm.size >= config.maxSessions || FileLock.live().length >= config.globalMaxSessions) {
+      return "skipped: no free editor slot";
+    }
     try {
       new FileLock(file).assertNotHeldElsewhere();
     } catch {
-      return false;
+      return "skipped: another agent has it open";
+    }
+    let stat;
+    try {
+      stat = statKey(file);
+    } catch {
+      return "skipped: file does not exist";
     }
     const marker = new FileLock(`warm:${file}`);
     try {
       marker.acquire();
     } catch {
-      return false; // another process pre-warmed it
+      return "skipped: another agent pre-warmed it";
     }
-    const entry = { marker, stat: statKey(file), shell: new PenShell({ inPath: file, outPath: file }) };
+    const entry = { marker, stat, shell: new PenShell({ inPath: file, outPath: file }) };
     entry.ready = entry.shell.start().then(
       () => (entry.started = true),
       () => false,
@@ -304,14 +337,20 @@ export class SessionPool {
     this.warm.set(file, entry);
     entry.timer = setTimeout(() => this.#closeWarm(file), config.prewarmMs);
     entry.timer.unref();
+    // Another agent short of slots may reclaim the marker; then this editor must go.
+    entry.watch = setInterval(() => {
+      if (!entry.marker.held()) this.#closeWarm(file);
+    }, 1000);
+    entry.watch.unref();
     entry.shell.onExit = () => {
       if (this.warm.get(file) === entry) this.#closeWarm(file);
     };
     if (!(await entry.ready)) {
       if (this.warm.get(file) === entry) await this.#closeWarm(file);
-      return false;
+      return "failed: the editor did not start";
     }
-    return true;
+    if (this.warm.get(file) !== entry && !entry.adopted) return "closed before use";
+    return "warm";
   }
 
   /** Removes the warm editor for `file` from the pool and returns it, or null. */
@@ -320,12 +359,14 @@ export class SessionPool {
     if (!entry) return null;
     this.warm.delete(file);
     clearTimeout(entry.timer);
+    clearInterval(entry.watch);
     return entry;
   }
 
+  // A warm editor has no changes to save, so it is stopped outright.
   async #discardWarm(entry) {
     entry.shell.onExit = null;
-    await entry.shell.close().catch(() => {});
+    entry.shell.kill();
     entry.marker.release();
   }
 
@@ -356,6 +397,7 @@ export class SessionPool {
   }
 
   async closeAll() {
+    this.closed = true;
     clearInterval(this.sweeper);
     await Promise.allSettled([...this.sessions.keys()].map((f) => this.close(f)).concat([...this.warm.keys()].map((f) => this.#closeWarm(f))));
   }
@@ -385,10 +427,19 @@ export class SessionPool {
       const globalFull = FileLock.live().length >= config.globalMaxSessions;
       if (!localFull && !globalFull) return;
 
-      const [warm] = this.warm.keys();
-      if (warm) {
-        await this.#closeWarm(warm); // an editor nobody uses yet goes first
-        continue;
+      if (globalFull) {
+        // Editors nobody uses yet go first: this server's own, then other agents' (their owner
+        // notices the marker is gone and stops its editor within a second).
+        const [warm] = this.warm.keys();
+        if (warm) {
+          await this.#closeWarm(warm);
+          continue;
+        }
+        const other = FileLock.live().find((h) => h.file.startsWith("warm:") && h.pid !== process.pid);
+        if (other) {
+          fs.rmSync(new FileLock(other.file).path, { force: true });
+          continue;
+        }
       }
       const [idle] = [...this.sessions.values()].filter((s) => !this.busy(s.file)).sort((a, b) => a.lastUsed - b.lastUsed);
       if (idle) {

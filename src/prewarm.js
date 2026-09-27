@@ -27,7 +27,10 @@ export async function prewarm({ pool, app, normalize, cwd = process.cwd() }) {
   for (const candidate of prewarmCandidates(cwd)) {
     try {
       const file = normalize(candidate);
-      if ((await app.available()) && (await app.openFiles({ fresh: true })).has(file)) continue;
+      if ((await app.available()) && (await app.openFiles({ fresh: true })).has(file)) {
+        pool.prewarmResults.set(file, "skipped: open in the desktop app");
+        continue;
+      }
       await pool.prewarm(file);
     } catch (err) {
       process.stderr.write(`pen-multi: pre-warm of ${candidate} skipped: ${err.message}\n`);
