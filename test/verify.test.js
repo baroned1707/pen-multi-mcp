@@ -233,3 +233,22 @@ test("web capture: nested screen-reader-only text stays hidden; SVG color comes 
   const again = await call(client, "capture", { source: { kind: "web", url: url("r4.html") }, savePath: "r4-capture" });
   assert.ok(!again.isError, "a previous capture may be replaced");
 });
+
+test("SVG color ignores masks and definitions, reads sprite <use> icons colored by a class; a lone PNG left in design-verify does not block verify", async () => {
+  fs.writeFileSync(
+    path.join(dir, "r5.html"),
+    `<body style="margin:0"><style>.sprite{fill:#2563EB}</style>
+     <svg width="0" height="0" style="position:absolute"><symbol id="s" viewBox="0 0 10 10"><rect width="10" height="10"/></symbol></svg>
+     <svg id="m" width="24" height="24" fill="none"><mask id="m0"><rect width="24" height="24" fill="#D9D9D9"/></mask><g mask="url(#m0)"><path d="M0 0h24v24H0z" fill="#1C1B1F"/></g></svg>
+     <svg class="sprite" width="24" height="24"><use href="#s"/></svg></body>`,
+  );
+  const cap = await call(client, "capture", { source: { kind: "web", url: url("r5.html") }, savePath: "r5-capture" });
+  assert.ok(!cap.isError, text(cap));
+  const snap = JSON.parse(fs.readFileSync(path.join(dir, "r5-capture.json"), "utf8"));
+  assert.deepEqual(snap.elements.filter((e) => e.tag === "svg" && e.box.w > 0).map((e) => e.fg), ["rgb(28, 27, 31)", "rgb(37, 99, 235)"]);
+  // A failed capture left only its screenshot behind: the next verify replaces it.
+  const png = out("captures", ".png");
+  fs.rmSync(png.replace(/\.png$/, ".json"));
+  const res = await verify({ source: { kind: "web", url: url("faithful.html") } });
+  assert.ok(!res.isError, text(res));
+});

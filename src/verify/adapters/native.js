@@ -40,7 +40,7 @@ const decode = (s) =>
     .replace(/&amp;/g, "&");
 // Icon-font glyphs (Unicode private use areas) are icons, not text.
 const PUA = /^[\uE000-\uF8FF\u{F0000}-\u{10FFFD}\s]+$/u;
-const textOf = (t) => (t && !PUA.test(t) ? t : undefined);
+const textOf = (t) => (t && !PUA.test(t) ? t.replace(/[\uE000-\uF8FF\u{F0000}-\u{10FFFD}]/gu, "").trim() || undefined : undefined);
 const pen = (...vals) => vals.find((v) => v && /(^|:id\/)pen:/.test(v));
 
 /** Parses `uiautomator dump` XML into elements in pixels (nesting kept as `parent`). */

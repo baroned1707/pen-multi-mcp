@@ -414,3 +414,9 @@ test("icon-font glyphs (private use area) are icons, not text, in pen-probe and 
   const xml = `<hierarchy><node class="android.widget.TextView" text="&#61697;" bounds="[0,0][48,48]" /><node class="android.widget.TextView" text="Home" bounds="[0,48][96,96]" /></hierarchy>`;
   assert.deepEqual(parseUiautomator(xml).map((e) => e.text), [undefined, "Home"]);
 });
+
+test("icon glyphs mixed into text are dropped from it", async () => {
+  const { withoutGlyphs } = await import("../probe/react-native/collect.js");
+  assert.equal(withoutGlyphs("\uF101 Home"), "Home");
+  assert.deepEqual(parseUiautomator(`<hierarchy><node text="&#61697; Home" bounds="[0,0][96,48]" /></hierarchy>`).map((e) => e.text), ["Home"]);
+});

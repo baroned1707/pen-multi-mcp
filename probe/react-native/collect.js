@@ -9,6 +9,8 @@ const INPUT_TYPES = /TextInput|RCTSinglelineTextInputView|RCTMultilineTextInputV
 
 // Icon fonts (@expo/vector-icons, react-native-vector-icons) draw glyphs from Unicode private use areas.
 export const isIconGlyph = (t) => typeof t === "string" && t.trim() !== "" && /^[\uE000-\uF8FF\u{F0000}-\u{10FFFD}\s]+$/u.test(t);
+/** Text without icon glyphs mixed into it ("\uF101 Home" reads "Home"). */
+export const withoutGlyphs = (t) => (typeof t === "string" ? t.replace(/[\uE000-\uF8FF\u{F0000}-\u{10FFFD}]/gu, "").trim() : t);
 
 const WEIGHTS = { thin: 100, ultralight: 200, light: 300, normal: 400, regular: 400, medium: 500, semibold: 600, bold: 700, heavy: 800, black: 900 };
 export const weightOf = (w) => {
@@ -143,7 +145,7 @@ export async function snapshotElements(rootFiber, { flatten, processColor, measu
       tag: v.tag,
       selector: v.selector,
       marker: v.marker,
-      text: isText ? v.text : undefined,
+      text: isText ? withoutGlyphs(v.text) : undefined,
       box,
       bg: color(s.backgroundColor),
       fg: isText || icon ? color(s.color ?? "black") : undefined,
