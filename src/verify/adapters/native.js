@@ -38,6 +38,9 @@ const decode = (s) =>
     .replace(/&apos;/g, "'")
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
     .replace(/&amp;/g, "&");
+// Icon-font glyphs (Unicode private use areas) are icons, not text.
+const PUA = /^[\uE000-\uF8FF\u{F0000}-\u{10FFFD}\s]+$/u;
+const textOf = (t) => (t && !PUA.test(t) ? t : undefined);
 const pen = (...vals) => vals.find((v) => v && /(^|:id\/)pen:/.test(v));
 
 /** Parses `uiautomator dump` XML into elements in pixels (nesting kept as `parent`). */
@@ -59,7 +62,7 @@ export function parseUiautomator(xml) {
       tag: (attrs.class ?? "").split(".").pop(),
       selector: attrs["resource-id"] || attrs["content-desc"] || undefined,
       marker: pen(attrs["resource-id"], attrs["content-desc"]),
-      text: attrs.text || undefined,
+      text: textOf(attrs.text),
       box,
     };
     if (box && box.w > 0 && box.h > 0) elements.push(el);
@@ -88,7 +91,7 @@ export function parseMaestro(out) {
         tag: a.class || a.elementType || undefined,
         selector: a["resource-id"] || a.accessibilityText || undefined,
         marker: pen(a["resource-id"], a.accessibilityText, a.identifier),
-        text: a.text || a.hintText || undefined,
+        text: textOf(a.text || a.hintText),
         box,
       });
     }

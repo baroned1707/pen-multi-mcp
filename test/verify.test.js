@@ -209,3 +209,27 @@ test("capture refuses to overwrite a file that is not a capture", async () => {
   assert.match(text(res), /not a capture; refusing to overwrite/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "keep.json"), "utf8")).name, "precious");
 });
+
+test("web capture: nested screen-reader-only text stays hidden; SVG color comes from its painted shapes; an unrelated PNG is never overwritten", async () => {
+  fs.writeFileSync(
+    path.join(dir, "r4.html"),
+    `<body style="margin:0"><style>.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}</style>
+     <button>X<span class="sr-only"><span>Close dialog</span></span></button>
+     <div style="clip-path:inset(50%);position:absolute"><p>Section heading</p></div>
+     <svg id="a" width="24" height="24" fill="none"><path d="M0 0h24v24H0z" fill="#2563EB"/></svg>
+     <svg id="b" width="24" height="24" fill="none" stroke="#16A34A"><path d="M0 0l24 24"/></svg>
+     <p style="visibility:hidden">Hidden parent <span style="visibility:visible">Visible child</span></p></body>`,
+  );
+  const cap = await call(client, "capture", { source: { kind: "web", url: url("r4.html") }, savePath: "r4-capture" });
+  assert.ok(!cap.isError, text(cap));
+  const snap = JSON.parse(fs.readFileSync(path.join(dir, "r4-capture.json"), "utf8"));
+  assert.deepEqual(snap.elements.filter((e) => e.text).map((e) => e.text), ["X", "Visible child"]);
+  const svgs = snap.elements.filter((e) => e.tag === "svg");
+  assert.deepEqual(svgs.map((e) => e.fg), ["rgb(37, 99, 235)", "rgb(22, 163, 74)"]);
+  fs.writeFileSync(path.join(dir, "logo.png"), "not a capture");
+  const res = await call(client, "capture", { source: { kind: "web", url: url("r4.html") }, savePath: "logo.png" });
+  assert.equal(res.isError, true);
+  assert.equal(fs.readFileSync(path.join(dir, "logo.png"), "utf8"), "not a capture");
+  const again = await call(client, "capture", { source: { kind: "web", url: url("r4.html") }, savePath: "r4-capture" });
+  assert.ok(!again.isError, "a previous capture may be replaced");
+});

@@ -82,12 +82,29 @@ function collect(limit) {
   const ICON_FONT = /material (icons|symbols)|icon|fontawesome|font awesome|ionicons|glyph/i;
   const pageW = Math.max(document.documentElement.scrollWidth, window.innerWidth);
   const pageH = Math.max(document.documentElement.scrollHeight, window.innerHeight);
-  // Present for assistive technology only, or parked off the page (skip links, closed drawers).
-  const offstage = (r, cs) =>
-    (r.width <= 1 && r.height <= 1) ||
-    /rect\(0(px)?,? 0(px)?,? 0(px)?,? 0(px)?\)/.test(cs.clip) ||
-    /inset\(50%/.test(cs.clipPath) ||
-    r.right + sx <= 0 || r.bottom + sy <= 0 || r.left + sx >= pageW || r.top + sy >= pageH;
+  // Present for assistive technology only (the whole subtree is hidden with it).
+  const srOnly = (r, cs) => (r.width <= 1 && r.height <= 1 && cs.overflow !== "visible") || /rect\(0(px)?,? 0(px)?,? 0(px)?,? 0(px)?\)/.test(cs.clip) || /inset\(50%/.test(cs.clipPath);
+  // Parked entirely off the page (skip links, closed drawers); its children may still be on it.
+  const offPage = (r) => r.right + sx <= 0 || r.bottom + sy <= 0 || r.left + sx >= pageW || r.top + sy >= pageH;
+  // The color an SVG paints: its first painted shape's fill (or stroke); unknown when none is set.
+  const svgColor = (svg) => {
+    const paint = (v) => v && v !== "none" && !/^url/.test(v) && !/^rgba\(0, 0, 0, 0\)$/.test(v);
+    const declared = (el) => el.getAttribute("fill") || el.style.fill;
+    for (const shape of [svg, ...svg.querySelectorAll("path, circle, rect, polygon, polyline, line, ellipse")]) {
+      const cs = getComputedStyle(shape);
+      if (shape !== svg && shape.getAttribute("fill") === "none") {
+        if (paint(cs.stroke)) return cs.stroke;
+        continue;
+      }
+      // Plain black with nothing declared is SVG's initial fill, not a choice: leave it unknown.
+      const initial = cs.fill === "rgb(0, 0, 0)" && !declared(shape) && !declared(svg);
+      if (shape !== svg && paint(cs.fill) && !initial) return cs.fill;
+      if (paint(cs.stroke)) return cs.stroke;
+    }
+    const own = getComputedStyle(svg);
+    return declared(svg) && paint(own.fill) ? own.fill : undefined;
+  };
+
   // A paragraph whose children are all inline (links, <strong>, <br>) is one text, as the design has it.
   // inline-block / inline-flex children (buttons, chips, badges) stay separate texts.
   const phrasing = (el) =>
@@ -106,7 +123,8 @@ function collect(limit) {
     // checkVisibility covers transparent ancestors and closed <details>; those hide the whole subtree.
     if (!invisible && (el.checkVisibility ? !el.checkVisibility({ opacityProperty: true }) : Number(cs.opacity) === 0) && cs.display !== "contents") return;
     const r = el.getBoundingClientRect();
-    const shown = !invisible && r.width > 0 && r.height > 0 && !offstage(r, cs) && !clipped(el, r, cs);
+    if (srOnly(r, cs)) return;
+    const shown = !invisible && r.width > 0 && r.height > 0 && !offPage(r) && !clipped(el, r, cs);
     if (shown) {
       let text = "";
       if (el.tagName === "INPUT") text = TEXT_INPUT.test(el.type) ? el.value || el.placeholder || "" : "";
@@ -149,7 +167,7 @@ function collect(limit) {
         box: { x: r.left + sx, y: r.top + sy, w: r.width, h: r.height },
         bg: cs.backgroundColor,
         // Text color, or the color an icon paints (SVG fill, icon-font glyph).
-        fg: text ? cs.color : el.tagName === "svg" ? (cs.fill && cs.fill !== "none" && !/^url/.test(cs.fill) ? cs.fill : cs.color) : ICON_FONT.test(cs.fontFamily) ? cs.color : undefined,
+        fg: text ? cs.color : el.tagName === "svg" ? svgColor(el) : ICON_FONT.test(cs.fontFamily) ? cs.color : undefined,
         icon: el.tagName === "svg" || ICON_FONT.test(cs.fontFamily) || undefined,
         fontSize: text ? num(cs.fontSize) : undefined,
         fontWeight: text ? num(cs.fontWeight) : undefined,

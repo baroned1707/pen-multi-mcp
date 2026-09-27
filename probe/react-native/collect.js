@@ -7,6 +7,9 @@ const TEXT_TYPES = /^(RCTText|Text|RCTParagraph)$/;
 const NESTED_TEXT = /^(RCTVirtualText|RCTRawText)$/;
 const INPUT_TYPES = /TextInput|RCTSinglelineTextInputView|RCTMultilineTextInputView|RCTUITextField/;
 
+// Icon fonts (@expo/vector-icons, react-native-vector-icons) draw glyphs from Unicode private use areas.
+export const isIconGlyph = (t) => typeof t === "string" && t.trim() !== "" && /^[\uE000-\uF8FF\u{F0000}-\u{10FFFD}\s]+$/u.test(t);
+
 const WEIGHTS = { thin: 100, ultralight: 200, light: 300, normal: 400, regular: 400, medium: 500, semibold: 600, bold: 700, heavy: 800, black: 900 };
 export const weightOf = (w) => {
   if (w === undefined || w === null) return undefined;
@@ -132,7 +135,8 @@ export async function snapshotElements(rootFiber, { flatten, processColor, measu
       return;
     }
     const s = v.style;
-    const isText = v.text !== undefined;
+    const icon = isIconGlyph(v.text);
+    const isText = v.text !== undefined && !icon;
     const el = {
       i: out.length,
       parent,
@@ -142,7 +146,8 @@ export async function snapshotElements(rootFiber, { flatten, processColor, measu
       text: isText ? v.text : undefined,
       box,
       bg: color(s.backgroundColor),
-      fg: isText ? color(s.color ?? "black") : undefined,
+      fg: isText || icon ? color(s.color ?? "black") : undefined,
+      icon: icon || undefined,
       fontSize: isText ? (s.fontSize ?? 14) : undefined,
       fontWeight: isText ? (weightOf(s.fontWeight) ?? 400) : undefined,
       lineHeight: isText ? s.lineHeight : undefined,

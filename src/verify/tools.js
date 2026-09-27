@@ -59,9 +59,10 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
   /** Captures a source into design-verify/captures/<name>.{json,png}. */
   async function capture(src, { width, height, colorScheme, name, savePath }) {
     const base = savePath ? path.resolve(process.cwd(), savePath).replace(/\.(json|png)$/i, "") : path.join(process.cwd(), OUT_DIR, "captures", name);
+    // Only a previous capture (its snapshot JSON) may be replaced, never an unrelated JSON or image.
+    const own = fs.existsSync(`${base}.json`) && isSnapshotFile(`${base}.json`);
     for (const f of [`${base}.json`, `${base}.png`]) {
-      if (!fs.existsSync(f)) continue;
-      if (f.endsWith(".json") && !isSnapshotFile(f)) throw new ReadError(`${f} exists and is not a capture; refusing to overwrite it. Choose another savePath.`);
+      if (fs.existsSync(f) && !own) throw new ReadError(`${f} exists and is not a capture; refusing to overwrite it. Choose another savePath.`);
     }
     fs.mkdirSync(path.dirname(base), { recursive: true });
     const screenshotPath = `${base}.png`;

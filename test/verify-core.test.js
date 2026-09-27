@@ -401,3 +401,16 @@ test("a wider device: a matched leaf that looks different is still reported (box
   const res = verifyScreen({ design: { ...d, nodes: d.nodes.filter((n) => n.box.y < 60) }, snapshot: { viewport: { w: W, h: 100 }, elements: ui.elements.filter((e) => e.box.y < 60 || e.tag === "img"), fields: FIELDS }, designImg, uiImg: shot });
   assert.ok(res.findings.some((f) => f.kind === "pixels" && f.designId === "avatar"), JSON.stringify(res.findings.map((f) => f.message)));
 });
+
+test("icon-font glyphs (private use area) are icons, not text, in pen-probe and native captures", async () => {
+  const { snapshotElements, isIconGlyph } = await import("../probe/react-native/collect.js");
+  assert.equal(isIconGlyph("\uF101"), true);
+  assert.equal(isIconGlyph("Home"), false);
+  const glyph = hostFiber("RCTText", { style: { color: "#2563EB", fontFamily: "Ionicons" } }, view({ x: 0, y: 0, w: 24, h: 24 }), textFiber("\uF101"));
+  const els = await snapshotElements({ child: glyph }, { flatten: (x) => x, processColor: () => 0xff2563eb, timeoutMs: 50 });
+  assert.equal(els[0].text, undefined);
+  assert.equal(els[0].icon, true);
+  assert.equal(els[0].fg, "rgba(37, 99, 235, 1)");
+  const xml = `<hierarchy><node class="android.widget.TextView" text="&#61697;" bounds="[0,0][48,48]" /><node class="android.widget.TextView" text="Home" bounds="[0,48][96,96]" /></hierarchy>`;
+  assert.deepEqual(parseUiautomator(xml).map((e) => e.text), [undefined, "Home"]);
+});
