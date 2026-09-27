@@ -287,5 +287,3 @@ test("a read-only snippet on an app document is not saved and does not claim a s
   await new Promise((r) => setTimeout(r, 2000));
   assert.equal(mtime(live), before, "nothing written for a read");
 });
-  assert.match(text(res), /HINT: Nothing was printed/);
-});
