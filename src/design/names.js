@@ -15,11 +15,18 @@ const CODE = /^([A-Z]{1,3}\d+[a-z]?)(?=\s|$)/;
 const isUpperWord = (t) => t === t.toUpperCase() && t !== t.toLowerCase() && !CODE.test(t);
 
 function widthOf(token, frameWidth) {
-  const wh = /^(\d{3,4})\s*[×x]\s*\d{3,4}$/.exec(token);
-  if (wh) return Number(wh[1]);
-  // "desktop 1280", "tablet 768", "1280px"
-  const labelled = /^(?:(?:desktop|tablet|mobile|phone|web|laptop|khổ)\s+)?(\d{3,4})\s*(?:px)?$/i.exec(token);
-  if (labelled && labelled[0] !== labelled[1]) return Number(labelled[1]);
+  // "1280×1000", "tablet dọc 834×1112", "1600×1000 (vỏ chặn 1320)": W×H described by ≤ 3 words.
+  const outer = token.replace(/\(.*?\)/g, " ").trim();
+  const wh = /(\d{3,4})\s*[×x]\s*\d{3,4}/.exec(outer);
+  if (wh && outer.replace(wh[0], " ").trim().split(/\s+/).filter(Boolean).length <= 3) return Number(wh[1]);
+  // "desktop 1280", "tablet dọc 834", "điện thoại 390", "1280 (nội dung 1039 / nhìn 1000)", "1280px":
+  // a known width, or the frame's own width, described by at most three words.
+  const bare = token.replace(/\(.*?\)/g, " ").trim();
+  const numbers = [...bare.matchAll(/\b(\d{3,4})(?:px)?\b/g)].map((m) => Number(m[1]));
+  const words = bare.replace(/\b\d{3,4}(?:px)?\b/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (numbers.length === 1 && words.length <= 3 && (KNOWN_WIDTHS.has(numbers[0]) || Math.abs(numbers[0] - frameWidth) <= 2)) {
+    if (words.length > 0 || bare !== token || /px$/.test(bare)) return numbers[0];
+  }
   if (/^\d{3,4}$/.test(token)) {
     const n = Number(token);
     if (KNOWN_WIDTHS.has(n) || Math.abs(n - frameWidth) <= 2) return n;
@@ -45,8 +52,10 @@ export function parseScreenName(name, frame = {}, conventions = {}) {
     }
   }
   const clean = String(name ?? "").replace(DECORATION, "").trim();
-  const [head, ...dashParts] = clean.split(/\s+[—–]\s+/);
-  const headParts = head.split(/\s*[·•|]\s*/).filter(Boolean);
+  const [head, ...dash] = clean.split(/\s+[—–]\s+/);
+  const split = (t) => t.split(/\s*[·•|]\s*/).filter(Boolean);
+  const headParts = split(head);
+  const dashParts = dash.flatMap(split);
   const title = [];
   let width = null, theme = null, state = null;
   const classify = (token, fromDash) => {

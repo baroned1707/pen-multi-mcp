@@ -77,7 +77,8 @@ export function registerDesignTools({ tool, z, route, app, pool, timings, ok, fa
     const exact = frames.filter((c) => c.id === wanted || c.name === wanted);
     if (exact.length === 1) return { id: exact[0].id, frame: exact[0], analysis };
     const lower = wanted.toLowerCase();
-    const loose = frames.filter((c) => c.row.code?.toLowerCase() === lower || c.name.toLowerCase().includes(lower));
+    // Exact name matches win over partial ones; two frames with the same name are still ambiguous.
+    const loose = exact.length ? exact : frames.filter((c) => c.row.code?.toLowerCase() === lower || c.name.toLowerCase().includes(lower));
     if (loose.length === 1) return { id: loose[0].id, frame: loose[0], analysis };
     if (loose.length > 1) {
       throw new ReadError(

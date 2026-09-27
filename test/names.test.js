@@ -91,3 +91,15 @@ test("labelled widths ('desktop 1280', 'tablet 768') join their screen's row", (
   assert.equal(parseScreenName("S14 · Đăng bậc 0 · tablet 768 · tối", { width: 768 }).width, 768);
   assert.equal(parseScreenName("S1 · Bản đồ · 320 · sáng", { width: 320 }).screen, "S1 · Bản đồ");
 });
+
+test("trading-agent's described widths: 'điện thoại 390', 'tablet dọc 834', '1280 (nội dung …)'", () => {
+  const phone = parseScreenName("Vị thế — 4 mã · điện thoại 390", { width: 390 });
+  assert.deepEqual([phone.screen, phone.state, phone.width], ["Vị thế", "4 mã", 390]);
+  assert.equal(parseScreenName("Vị thế — 4 mã · tablet dọc 834", { width: 834 }).width, 834);
+  const wide = parseScreenName("Vị thế — 4 mã, 1 lỗ · 1280 (nội dung 1039 / nhìn 1000)", { width: 1280 });
+  assert.deepEqual([wide.state, wide.width], ["4 mã, 1 lỗ", 1280]);
+  assert.equal(parseScreenName("Report 2026 · Q3", { width: 390 }).screen, "Report 2026 · Q3", "a year is not a width");
+  const tablet = parseScreenName("Hôm nay — tablet dọc 834×1112", { width: 834 });
+  assert.deepEqual([tablet.screen, tablet.state, tablet.width], ["Hôm nay", null, 834]);
+  assert.equal(parseScreenName("Hôm nay — 1600×1000 (vỏ chặn 1320)", { width: 1600 }).width, 1600);
+});
