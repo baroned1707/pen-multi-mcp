@@ -50,7 +50,7 @@ Many agents and projects:
 - A file can be edited headlessly by only one agent at a time; the error names the agent's project holding it. fork_version copies a file so you can work on a separate version in parallel.
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.`;
 
-const server = new McpServer({ name: "pen-multi", version: "0.5.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "0.6.0" }, { instructions: INSTRUCTIONS });
 
 const filePath = z
   .string()

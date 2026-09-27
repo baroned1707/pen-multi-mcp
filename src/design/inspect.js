@@ -204,10 +204,21 @@ export function sections(model) {
     if (c === scroll) for (const k of visibleChildren(c).filter((k) => !NOT_CONTENT.has(k.type))) body.push({ node: k, items: items(k), fixed: false });
     else body.push({ node: c, items: items(c), fixed: Boolean(scroll) });
   }
+  // Unwrap a lone wrapper ("Wrap", a fixed-height "Vùng cuộn"): when all content sits in one
+  // frame, its children are the sections an implementer needs, in order.
+  let unwrapped = body;
+  for (let depth = 0; depth < 4 && unwrapped.length === 1; depth++) {
+    const only = unwrapped[0];
+    const kids = visibleChildren(only.node).filter((k) => !NOT_CONTENT.has(k.type));
+    // A list (every child the same structure) is one section, not a wrapper.
+    if (only.node.type !== "frame" || only.node.component || kids.length < 2 || collapse(kids).length === 1) break;
+    unwrapped = kids.map((k) => ({ node: k, items: items(k), fixed: only.fixed, within: only.node }));
+  }
   return {
     scroll,
+    wrapper: unwrapped !== body ? unwrapped[0].within : null,
     shell: shell.map((c) => ({ node: c, where: edge(c) ?? (pinned(c) ? "pinned" : "named"), items: items(c) })),
-    sections: body,
+    sections: unwrapped,
   };
 }
 

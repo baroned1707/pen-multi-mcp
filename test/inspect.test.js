@@ -210,3 +210,18 @@ test("a shell-like name in the middle of the page is content; at an end it is sh
   assert.deepEqual(s.shell.map((x) => x.node.name), ["Header", "Chân"]);
   assert.deepEqual(s.sections.map((x) => x.node.name), ["Chân dung tác giả", "Section header", "List"]);
 });
+
+test("a lone wrapper frame is unwrapped so its children are the sections", () => {
+  const s = sections(screen("vertical", [
+    node("sb", "S", [0, 0, 390, 44], { type: "frame", name: "Status bar" }),
+    node("w", "S", [0, 44, 390, 740], { type: "frame", name: "Wrap", layout: "vertical" }),
+    node("w1", "w", [0, 0, 390, 100], { type: "frame", name: "Summary" }),
+    node("w2", "w", [0, 100, 390, 300], { type: "frame", name: "Holdings" }),
+    node("w3", "w", [0, 400, 390, 80], { type: "frame", name: "Add position" }),
+    node("tb", "S", [0, 784, 390, 60], { type: "frame", name: "Tab bar" }),
+  ]));
+  assert.equal(s.wrapper.name, "Wrap");
+  assert.deepEqual(s.sections.map((x) => x.node.name), ["Summary", "Holdings", "Add position"]);
+  const card = sections(screen("vertical", [node("c", "S", [0, 0, 390, 200], { type: "frame", name: "Card" }), node("c1", "c", [0, 0, 10, 10], { type: "text", name: "t", content: "x" })]));
+  assert.deepEqual(card.sections.map((x) => x.node.name), ["Card"], "a single child is not unwrapped");
+});
