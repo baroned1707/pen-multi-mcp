@@ -8,6 +8,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppBridge, AppUnavailableError, textOf } from "./app.js";
 import { toContent } from "./format.js";
+import { executeHints, mayWrite } from "./hints.js";
 import { SaveScheduler } from "./saver.js";
 import { Timings } from "./timing.js";
 import { carryImages, readPrinted, snippets } from "./transfer.js";
@@ -34,6 +35,12 @@ Where a call runs:
 - spawn_agents runs in the app, so it needs filePath open there; otherwise use your own subagents on the same filePath.
 - ${config.autosave ? "Every successful change is saved to disk automatically, in the background right after the call returns (in the app too, which also saves the user's own unsaved edits in that document). Call save before reading a .pen file from disk or committing it: it waits for the background save." : "Changes are not saved automatically: call save."}
 - Each response starts with "File: <path>" and says where it ran. A file is never silently routed to another document.
+
+Implementing or refactoring UI from a design (port mode):
+- The design is the source of truth for structure, order, content and styling. "Update the existing component" means change it until it matches the design, never keep what is there; rebuild the app shell, navigation or a component when its structure differs.
+- Before editing code: call overview, then inspect the target screen (save it with savePath and re-read that file after context compaction). List the structural differences between the design and the current UI (shell, navigation, section order, missing or extra elements) and work through that list.
+- If project rules conflict with matching the design (e.g. "preserve the theme"), ask the user once which wins and follow the answer.
+- Never port from screenshots or from memory: read the design as data with inspect. Screenshots are for a human sanity check, not for measurements.
 
 Many agents and projects:
 - Relative filePaths resolve against this agent's working directory (${process.cwd()}).
@@ -65,6 +72,9 @@ const scheduleHeadlessSave = (session) =>
 
 /** Schedules a background save of an app document. */
 const scheduleAppSave = (file) => saver.markDirty(file, () => timings.time("save", () => app.save(file)));
+
+const withHints = (res, hints) =>
+  hints.length ? { ...res, content: [...res.content, { type: "text", text: hints.map((h) => `HINT: ${h}`).join("\n") }] } : res;
 
 const fail = (text, file) => ({ content: [{ type: "text", text: file ? `File: ${file}\n\n${text}` : text }], isError: true });
 
@@ -275,16 +285,24 @@ tool(
   async ({ filePath: f, input, editId, edits }) => {
     if (!input && !(editId && edits)) throw new Error("Provide `input`, or `editId` together with `edits`.");
     const payload = input ? { input } : { editId, edits };
-    const target = await route(f, { write: true });
-    if (target.mode === "app") return appWrite(target, "execute", payload);
+    const writes = mayWrite(input);
+    const target = await route(f, { write: writes });
+    if (target.mode === "app") {
+      const res = writes
+        ? await appWrite(target, "execute", payload)
+        : fromApp(await timings.time("call", () => app.call("execute", { filePath: target.file, ...payload })), target);
+      return withHints(res, executeHints({ input, text: textOf(res), error: res.isError ? textOf(res) : null }));
+    }
     const file = target.file;
     return pool.use(file, async (session, warnings) => {
       const res = await timings.time("call", () => session.shell.call("execute", payload));
-      if (res.error) return fail(res.error, file);
-      session.dirty = true;
+      const hints = executeHints({ input, text: res.text, error: res.error });
+      if (res.error) return withHints(fail(res.error, file), hints);
       const notes = [...warnings, ...saveWarning(file)];
+      if (!writes) return withHints(ok(res.text, notes, file), hints);
+      session.dirty = true;
       if (config.autosave) scheduleHeadlessSave(session);
-      return ok(`${res.text}\n\n${config.autosave ? SAVING_NOTE : NOT_SAVING_NOTE}`, notes, file);
+      return withHints(ok(`${res.text}\n\n${config.autosave ? SAVING_NOTE : NOT_SAVING_NOTE}`, notes, file), hints);
     });
   },
 );

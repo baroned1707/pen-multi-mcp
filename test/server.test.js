@@ -127,3 +127,16 @@ test("a symlinked path maps to the same session as its real path", async () => {
     fs.unlinkSync(link);
   }
 });
+
+test("the real engine's silent and failing reads get concrete hints", async () => {
+  const silent = await call(client, "execute", { filePath: fileA, input: "Get(n => n.name).length" });
+  assert.match(text(silent), /HINT: Nothing was printed/);
+  const cons = await call(client, "execute", { filePath: fileA, input: "console.log(1)" });
+  assert.match(text(cons), /HINT: .*Print/);
+  const awaited = await call(client, "execute", { filePath: fileA, input: 'const x = await Get("zz"); Print(x)' });
+  assert.match(text(awaited), /HINT: .*synchronous/);
+  const shot = await call(client, "execute", { filePath: fileA, input: 'TakeScreenshot("zz")' });
+  assert.match(text(shot), /HINT: .*array/);
+  const read = await call(client, "execute", { filePath: fileA, input: 'Print("hello")' });
+  assert.doesNotMatch(text(read), /HINT|Saving to disk/);
+});

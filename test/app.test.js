@@ -55,10 +55,10 @@ after(async () => {
 
 test("the app's active document is edited in the app and saved to disk", async () => {
   const before = mtime(live);
-  const res = await call(s, "execute", { filePath: live, input: "x" });
+  const res = await call(s, "execute", { filePath: live, input: 'Update("n",{name:"x"})' });
   assert.ok(!res.isError, text(res));
   assert.match(text(res), /File: .*live\.pen \(in the pen\.dev desktop app\)/);
-  assert.match(text(res), new RegExp(`APP-EXECUTE doc=${live} input=x`));
+  assert.match(text(res), new RegExp(`APP-EXECUTE doc=${live} input=Update.*"x"`));
   assert.match(text(res), /Saving to disk in the background/);
   await call(s, "save", { filePath: live });
   assert.ok(mtime(live) > before, "written to disk");
@@ -216,8 +216,8 @@ test("a window closed after the active document was cached: the next write goes 
 test("a write without filePath after the active tab changed goes to the new tab", async () => {
   await call(s, "get_app_state", {}); // caches live.pen as active
   setApp({ active: background, open: [live, background] });
-  const res = await call(s, "execute", { input: "no-path" });
-  assert.match(text(res), new RegExp(`APP-EXECUTE doc=${background} input=no-path`));
+  const res = await call(s, "execute", { input: 'Update("n",{name:"no-path"})' });
+  assert.match(text(res), new RegExp(`APP-EXECUTE doc=${background} input=Update.*no-path`));
 });
 
 test("a dashboard-opened document that was closed does not receive the write", async () => {
@@ -226,7 +226,7 @@ test("a dashboard-opened document that was closed does not receive the write", a
   const a = await agent(withApp({ PEN_MULTI_APP_STATE_TTL_MS: "60000" })); // its first lookup caches dash
   assert.match(text(await call(a, "get_app_state", {})), /File: .*dashboard\.pen/);
   setApp({ active: live, open: [live] }); // the user closes it
-  const res = await call(a, "execute", { filePath: dash, input: "w" });
+  const res = await call(a, "execute", { filePath: dash, input: 'Update("n",{name:"w"})' });
   assert.doesNotMatch(text(res), /APP-EXECUTE/, "not sent to the app, where it would land in live.pen");
   await call(a, "close_file", { filePath: dash });
 });
@@ -255,7 +255,7 @@ test("writes respond before saving; a burst saves once; save flushes and waits",
   const quick = await agent(withApp({ PEN_MULTI_SAVE_DELAY_MS: "5000" })); // longer than the burst
   const before = mtime(live);
   for (let i = 0; i < 5; i++) {
-    const res = await call(quick, "execute", { filePath: live, input: `burst-${i}` });
+    const res = await call(quick, "execute", { filePath: live, input: `Update("n",{name:"burst-${i}"})` });
     assert.match(text(res), /Saving to disk in the background/);
   }
   assert.equal(mtime(live), before, "not saved before responding");
@@ -266,9 +266,9 @@ test("writes respond before saving; a burst saves once; save flushes and waits",
 
 test("a failed background save is reported on the next call for that file and in list_sessions", async () => {
   const broken = await agent(withApp({ PEN_MULTI_SAVE_DELAY_MS: "50", FAKE_SAVE_NOOP: "1" }));
-  await call(broken, "execute", { filePath: live, input: "unsaved" });
+  await call(broken, "execute", { filePath: live, input: 'Update("n",{name:"unsaved"})' });
   await new Promise((r) => setTimeout(r, 2500)); // the fake CLI save runs and fails the mtime check
-  const next = await call(broken, "execute", { filePath: live, input: "next" });
+  const next = await call(broken, "execute", { filePath: live, input: 'Update("n",{name:"next"})' });
   assert.match(text(next), /WARNING: .*not.*disk/i);
   const list = JSON.parse(text(await call(broken, "list_sessions", {})));
   assert.ok(list.saveErrors[live], JSON.stringify(list.saveErrors));
@@ -278,4 +278,14 @@ test("list_sessions reports timings", async () => {
   await call(s, "execute", { filePath: live, input: "t" });
   const list = JSON.parse(text(await call(s, "list_sessions", {})));
   assert.ok(list.timings.route && list.timings.call, JSON.stringify(list.timings));
+});
+
+test("a read-only snippet on an app document is not saved and does not claim a save", async () => {
+  const before = mtime(live);
+  const res = await call(s, "execute", { filePath: live, input: 'Print(Get("n"))' });
+  assert.doesNotMatch(text(res), /Saving to disk/);
+  await new Promise((r) => setTimeout(r, 2000));
+  assert.equal(mtime(live), before, "nothing written for a read");
+});
+  assert.match(text(res), /HINT: Nothing was printed/);
 });
