@@ -52,8 +52,8 @@ async function readWithin(run, rootId, budget) {
   return merged;
 }
 
-/** Root nodes, variables, and per-root statistics read in batches (halved when interrupted). */
-export async function readOverview(run, { batch = 50 } = {}) {
+/** Root nodes, variables, and per-root statistics read in batches (halved when interrupted). Each engine call costs ~400 ms however little it reads, so batches are large. */
+export async function readOverview(run, { batch = 600 } = {}) {
   const res = await run(readRoots());
   if (res.error) throw new ReadError(res.error);
   const data = printed(res.text, "ROOTS");
