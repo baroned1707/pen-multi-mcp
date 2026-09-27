@@ -80,8 +80,8 @@ test("overview focus lists frame ids; inspect by name resolves and reports every
   assert.match(t, /Components used: C\/Button ×1/);
   assert.match(t, /- top: Header — "Checkout"/);
   assert.match(t, /- bottom: Tab bar/);
-  assert.match(t, /1\. List — "Alpha" "Beta" "Gamma" "Delta"/);
-  assert.match(t, /2\. Primary — <C\/Dot> "Pay now"/, "instance content with its override");
+  assert.match(t, /1\. List \(\w+\) — "Alpha" "Beta" "Gamma" "Delta"/);
+  assert.match(t, /2\. Primary \(\w+\) — <C\/Dot> "Pay now"/, "instance content with its override");
   assert.match(t, /×3 more like Row \(content: "Beta", "Gamma", "Delta"\)/);
   assert.match(t, /Title \[text\] .*"Checkout" Inter 18 700 lh 22.5px · color \$ink\(#111111 light, #EEEEEE dark\)/);
   assert.match(t, /Primary \[frame ← C\/Button\]/);
@@ -156,7 +156,7 @@ test("a nested instance swapped through an override reports the component actual
   assert.match(t, /Starred \[frame ← C\/Button\]/);
   // The replacement node takes the component's name and its own id; it must still say which component it is.
   assert.match(t, /C\/Star \[frame ← C\/Star\]/);
-  assert.match(t, /Starred — <C\/Star> "Go"/);
+  assert.match(t, /Starred \(\w+\) — <C\/Star> "Go"/);
 });
 
 test("a headless read-only snippet leaves the file clean", async () => {
@@ -214,5 +214,23 @@ test("with autosave off: a spec of an unsaved file can be refreshed, and close_f
     assert.doesNotMatch(after, /Draft/, "the dropped screen is gone from the overview");
   } finally {
     await off.close();
+  }
+});
+
+test("a fresh agent's second call reuses the analysis, and inspect by id right after overview keeps the breadcrumb", async () => {
+  const fresh = await connect({ home: path.join(dir, "home-fresh"), cwd: dir });
+  try {
+    const copy = path.join(dir, "copy.pen");
+    await call(client, "save", { filePath: file });
+    fs.copyFileSync(file, copy);
+    const first = text(await call(fresh, "overview", { filePath: copy }));
+    assert.doesNotMatch(first, /cached analysis/);
+    assert.match(text(await call(fresh, "overview", { filePath: copy })), /cached analysis/);
+    const id = /Checkout · light → id (\w+)/.exec(text(await call(fresh, "overview", { filePath: copy, focus: "Checkout" })))[1];
+    const t = text(await call(fresh, "inspect", { filePath: copy, target: id }));
+    assert.match(t, /Variants: Checkout · light/);
+    assert.match(t, /Comes from: Home · light "pay"/);
+  } finally {
+    await fresh.close();
   }
 });

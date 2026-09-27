@@ -192,9 +192,21 @@ test("names are matched as whole words; small absolute buttons are not pinned ba
 test("section lists collapse repeated rows and stop at the cap", () => {
   const rowsNodes = Array.from({ length: 60 }, (_, i) => node(`r${i}`, "L", [0, i * 10, 390, 10], { type: "frame", name: "Row" }));
   const s = sections(screen("vertical", [node("L", "S", [0, 0, 390, 844], { type: "frame", name: "List", layout: "vertical", height: "fill_container" }), ...rowsNodes]));
-  assert.deepEqual(sectionLines(s), ["1. Row — ", "   ×59 more like Row"]);
+  assert.deepEqual(sectionLines(s), ["1. Row (r0) — ", "   ×59 more like Row"]);
   const many = sections(screen("vertical", Array.from({ length: 50 }, (_, i) => node(`k${i}`, "S", [0, i * 10, 390, 10], { type: "frame", name: `Block ${i}` }))));
   const lines = sectionLines(many, { max: 5 });
   assert.equal(lines.length, 6);
   assert.match(lines[5], /45 more sections/);
+});
+
+test("a shell-like name in the middle of the page is content; at an end it is shell", () => {
+  const s = sections(screen("vertical", [
+    node("h", "S", [0, 0, 390, 56], { type: "frame", name: "Header" }),
+    node("a", "S", [0, 56, 390, 200], { type: "frame", name: "Chân dung tác giả" }),
+    node("sh", "S", [0, 256, 390, 40], { type: "frame", name: "Section header" }),
+    node("l", "S", [0, 296, 390, 400], { type: "frame", name: "List" }),
+    node("f", "S", [0, 780, 390, 64], { type: "frame", name: "Chân" }),
+  ]));
+  assert.deepEqual(s.shell.map((x) => x.node.name), ["Header", "Chân"]);
+  assert.deepEqual(s.sections.map((x) => x.node.name), ["Chân dung tác giả", "Section header", "List"]);
 });

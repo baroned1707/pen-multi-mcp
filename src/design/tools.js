@@ -55,9 +55,15 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
     const hit = cache.get(target.file);
     if (!refresh && hit && hit.key === key) return { ...hit, cached: true };
     if (cachedOnly) return null;
+    const gen = generations.get(target.file) ?? 0;
     const conv = conventions(target.file);
     const { data, stats, unavailable } = await readOverview(reader(target));
-    const entry = { key, analysis: analyze(data, stats, conv), unavailable, readAt: new Date().toISOString() };
+    // Reading opens a headless session, which changes the key; store it under the key the next
+    // lookup will compute. The generation is the one from before the read, so a write that
+    // lands meanwhile still makes the next lookup miss.
+    const session = target.mode === "app" ? null : pool.sessions.get(target.file);
+    const storeKey = session ? `session:${session.openedAt}:${gen}` : cacheKey(target);
+    const entry = { key: storeKey, analysis: analyze(data, stats, conv), unavailable, readAt: new Date().toISOString() };
     cache.set(target.file, entry);
     return { ...entry, cached: false };
   }
@@ -179,7 +185,7 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
           try {
             prev = JSON.parse(fs.readFileSync(out, "utf8"));
           } catch {}
-          if (!(prev?.pen && "sha1" in prev.pen)) throw new ReadError(`${out} exists and is not an inspect spec; refusing to overwrite it.`);
+          if (!(prev && typeof prev.pen === "object" && prev.pen && "sha1" in prev.pen)) throw new ReadError(`${out} exists and is not an inspect spec; refusing to overwrite it.`);
         }
         // Hash what is on disk after pending saves, so the hash matches the data just read.
         await saver?.flush(target.file).catch(() => {});
@@ -214,7 +220,8 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
           target: { id, name: model.root.name },
           breadcrumb: crumb,
           shell: sec.shell.map((s) => ({ name: s.node.name, where: s.where, items: s.items })),
-          sections: sec.sections.slice(0, 200).map((s) => ({ name: s.node.name ?? s.node.type, fixed: s.fixed, items: s.items.slice(0, 30) })),
+          sections: sec.sections.slice(0, 200).map((s) => ({ id: s.node.id, name: s.node.name ?? s.node.type, fixed: s.fixed, items: s.items.slice(0, 30) })),
+          truncatedSections: sec.sections.length > 200 ? sec.sections.length - 200 : undefined,
           ...full,
           nodes: full.nodes.slice(0, cap),
           truncatedNodes: full.nodes.length > cap ? full.nodes.length - cap : undefined,
@@ -253,7 +260,7 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
         ...(sec.shell.length ? sec.shell.map((s) => `- ${s.where}: ${s.node.name ?? s.node.type} — ${s.items.slice(0, 10).join(" ")}`) : ["- none"]),
         "",
         `## Sections in order${sec.scroll ? ` (scroll container "${sec.scroll.name ?? sec.scroll.type}"; "fixed" sections sit outside it and do not scroll)` : ""}`,
-        ...sectionLines(sec),
+        ...sectionLines(sec, { max: Math.max(40, Math.floor(maxLines / 10)) }),
         "",
         "## Outline",
         ...outline(model, { depth, maxLines, flavor, continueWith: (nodeId) => `inspect({ filePath: ${JSON.stringify(target.file)}, target: ${JSON.stringify(nodeId)} })` }),
