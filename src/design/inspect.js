@@ -9,8 +9,25 @@ const clip = (s, n = 60) => {
 };
 
 const visibleChildren = (n) => n.children.filter((c) => !c.hidden);
-/** Frames without a layout property lay out as a horizontal row; `none` means absolute. */
-const layoutOf = (n) => (n.type !== "frame" ? null : n.layout ?? "horizontal");
+/** Frames without a layout property lay out as a horizontal row; `none` means absolute; groups position children absolutely. */
+const layoutOf = (n) => (n.type === "group" ? "none" : n.type !== "frame" ? null : n.layout ?? "horizontal");
+
+/**
+ * The color a node paints with, from any fill shape the schema allows: "$token", "#hex",
+ * { type: "color", color }, or an array of fills. Gradients and images are reported as such.
+ */
+export function primaryFill(raw, resolved) {
+  if (raw === undefined || raw === null) return null;
+  const list = Array.isArray(raw) ? raw : [raw];
+  const rlist = Array.isArray(resolved) ? resolved : [resolved];
+  const enabled = list.map((f, i) => [f, rlist[i]]).filter(([f]) => !(f && typeof f === "object" && f.enabled === false));
+  if (!enabled.length) return null;
+  const [f, rf] = enabled[0];
+  const extra = enabled.length - 1;
+  if (typeof f === "string") return { kind: "color", raw: f, resolved: typeof rf === "string" ? rf : undefined, extra };
+  if (f?.type === "color") return { kind: "color", raw: f.color, resolved: typeof rf?.color === "string" ? rf.color : undefined, extra };
+  return { kind: f?.type?.includes("gradient") ? "gradient" : f?.type ?? "unknown", extra };
+}
 
 function sizing(v) {
   if (v === undefined || v === null) return null;
@@ -33,6 +50,14 @@ function value(model, raw, resolved) {
   }
   if (typeof raw === "object") return describeFill(raw);
   return num(raw);
+}
+
+/** A fill for display: the color with every theme's value, plus gradients, images and extra layers. */
+function paint(model, raw, resolved) {
+  const p = primaryFill(raw, resolved);
+  if (!p) return null;
+  const base = p.kind === "color" ? value(model, p.raw, p.resolved) : p.kind;
+  return p.extra ? `${base} + ${p.extra} more fill${p.extra > 1 ? "s" : ""}` : base;
 }
 
 /** strokeWidth is a number or per side ({ bottom: 1 }). */
@@ -73,20 +98,21 @@ export function describe(model, n) {
     parts.push(bits.join(" "));
   }
   if (n.layoutPosition === "absolute") parts.push("absolute");
-  if (n.fill !== undefined && n.type !== "text" && n.type !== "icon") parts.push(`fill ${value(model, n.fill, n.resolved?.fill)}`);
+  if (n.fill !== undefined && n.type !== "text" && n.type !== "icon") parts.push(`fill ${paint(model, n.fill, n.resolved?.fill)}`);
   if (n.cornerRadius !== undefined) parts.push(`radius ${Array.isArray(n.cornerRadius) ? n.cornerRadius.map((r) => value(model, r)).join(" ") : value(model, n.cornerRadius)}`);
-  if (n.stroke !== undefined) parts.push(`stroke ${value(model, n.stroke, n.resolved?.stroke)} ${strokeSides(n.strokeWidth)}`);
+  if (n.stroke !== undefined) parts.push(`stroke ${paint(model, n.stroke, n.resolved?.stroke)} ${strokeSides(n.resolved?.strokeWidth ?? n.strokeWidth)}`);
   for (const e of effects(n.effect)) parts.push(e);
   if (n.opacity !== undefined && n.opacity !== 1) parts.push(`opacity ${value(model, n.opacity)}`);
   if (n.type === "text") {
     const size = n.resolved?.fontSize ?? n.fontSize;
     const lh = n.resolved?.lineHeight ?? n.lineHeight;
-    const font = [value(model, n.fontFamily), value(model, n.fontSize), n.fontWeight ?? "", lh !== undefined && typeof size === "number" ? `lh ${num(size * lh)}px` : ""].filter(Boolean).join(" ");
+    const weight = n.fontWeight !== undefined ? value(model, n.fontWeight, n.resolved?.fontWeight) : "";
+    const font = [value(model, n.fontFamily), value(model, n.fontSize), weight, typeof lh === "number" && typeof size === "number" ? `lh ${num(size * lh)}px` : ""].filter(Boolean).join(" ");
     parts.push(`"${clip(n.resolved?.content ?? n.content)}" ${font}`);
-    if (n.fill !== undefined) parts.push(`color ${value(model, n.fill, n.resolved?.fill)}`);
+    if (n.fill !== undefined) parts.push(`color ${paint(model, n.fill, n.resolved?.fill)}`);
     if (n.textGrowth) parts.push(`grow ${n.textGrowth}`);
   }
-  if (n.type === "icon") parts.push(`icon ${n.library ?? ""}:${n.icon ?? ""} color ${value(model, n.fill, n.resolved?.fill) ?? "none"}`);
+  if (n.type === "icon") parts.push(`icon ${n.library ?? ""}:${n.icon ?? ""} color ${paint(model, n.fill, n.resolved?.fill) ?? "none"}`);
   if (n.component?.overrides?.length) parts.push(`overrides ${n.component.overrides.length}`);
   if (n.clipped) parts.push(`⚠ ${n.clipped} clipped`);
   return parts.join(" · ");
@@ -115,18 +141,21 @@ export function collapse(children) {
   return out;
 }
 
-const SHELL_NAME = /header|nav|tab ?bar|tabs|toolbar|app ?bar|bottom ?bar|status ?bar|điều hướng|thanh (điều hướng|tab|trên|dưới)|đầu trang|chân trang/i;
+const SHELL_NAME = /header|footer|nav|tab ?bar|tabs|toolbar|app ?bar|bottom ?bar|status ?bar|điều hướng|thanh (điều hướng|tab|trên|dưới)|đầu trang|chân trang|^chân$/i;
 const SCROLL_NAME = /scroll|content|body|main|cuộn|nội dung|thân/i;
 
 /**
- * The screen's sections in order, and which children look like app shell (docked header, tab bar).
- * If the screen has a main scroll container, its children are the sections.
+ * The screen's structure in reading order. App shell = children named like a header/footer/nav/tab
+ * bar, or pinned (absolute) to the top or bottom edge. Everything else is a section, in order; the
+ * main scroll container is expanded in place, and sections outside it are marked fixed (they do
+ * not scroll). Nothing is dropped.
  */
 export function sections(model) {
   const root = model.root;
   const top = visibleChildren(root);
-  const isShell = (c) =>
-    (c.abs.y <= 4 && c.abs.h <= 140) || (c.abs.y + c.abs.h >= root.abs.h - 4 && c.abs.h <= 140) || SHELL_NAME.test(c.name ?? "");
+  const edge = (c) => (c.abs.y <= 4 ? "top" : c.abs.y + c.abs.h >= root.abs.h - 4 ? "bottom" : null);
+  const pinned = (c) => (c.layoutPosition === "absolute" || layoutOf(root) === "none") && c.abs.h <= 140 && edge(c);
+  const isShell = (c) => Boolean(pinned(c) || SHELL_NAME.test(c.name ?? ""));
   const scroll = top
     .filter((c) => layoutOf(c) === "vertical" && (/^fill_container/.test(String(c.height)) || SCROLL_NAME.test(c.name ?? "")) && !isShell(c))
     .sort((a, b) => b.abs.h - a.abs.h)[0];
@@ -142,12 +171,17 @@ export function sections(model) {
     walk(n);
     return out;
   };
-  const shell = top.filter((c) => c !== scroll && isShell(c));
-  const body = scroll ? visibleChildren(scroll) : top.filter((c) => !shell.includes(c));
+  const shell = top.filter(isShell);
+  const body = [];
+  for (const c of top) {
+    if (shell.includes(c)) continue;
+    if (c === scroll) for (const k of visibleChildren(c)) body.push({ node: k, items: items(k), fixed: false });
+    else body.push({ node: c, items: items(c), fixed: Boolean(scroll) });
+  }
   return {
     scroll: scroll ?? null,
-    shell: shell.map((c) => ({ node: c, where: c.abs.y <= 4 ? "top" : c.abs.y + c.abs.h >= root.abs.h - 4 ? "bottom" : "named", items: items(c) })),
-    sections: body.map((c) => ({ node: c, items: items(c) })),
+    shell: shell.map((c) => ({ node: c, where: edge(c) ?? "named", items: items(c) })),
+    sections: body,
   };
 }
 
@@ -184,7 +218,12 @@ export function hint(model, n, parent, flavor) {
   const p = pads(n.resolved?.padding ?? n.padding);
   const gap = n.resolved?.gap ?? n.gap;
   const radius = n.resolved?.cornerRadius ?? n.cornerRadius;
-  const fill = n.fill !== undefined ? colorOf(n.fill, n.resolved?.fill) : null;
+  const pf = primaryFill(n.fill, n.resolved?.fill);
+  const fill = pf?.kind === "color" ? colorOf(pf.raw, pf.resolved) : null;
+  const fillNote = pf && pf.kind !== "color" ? `${pf.kind} fill (see design)` : pf?.extra ? `+${pf.extra} more fills (see design)` : null;
+  const weight = n.resolved?.fontWeight ?? n.fontWeight;
+  const strokeWidth = n.resolved?.strokeWidth ?? n.strokeWidth;
+  const stroke = primaryFill(n.stroke, n.resolved?.stroke);
   const shadow = effects(n.effect).find((e) => e.startsWith("shadow"));
 
   if (flavor === "tailwind") {
@@ -206,8 +245,8 @@ export function hint(model, n, parent, flavor) {
     if (fill && n.type !== "text" && n.type !== "icon") c.push(`bg-${fill.tw}`);
     if (typeof radius === "number") c.push(`rounded-[${px(radius)}]`);
     if (n.stroke !== undefined) {
-      const s = colorOf(n.stroke, n.resolved?.stroke);
-      const sw = n.strokeWidth ?? 1;
+      const s = (stroke?.kind === "color" ? colorOf(stroke.raw, stroke.resolved) : null);
+      const sw = strokeWidth ?? 1;
       if (typeof sw === "object") for (const [side, v] of Object.entries(sw)) c.push(`border-${side[0]}-[${px(v)}]`);
       else c.push(sw === 1 ? "border" : `border-[${px(sw)}]`);
       if (s) c.push(`border-${s.tw}`);
@@ -216,11 +255,12 @@ export function hint(model, n, parent, flavor) {
     if (n.type === "text") {
       if (typeof size === "number") c.push(`text-[${px(size)}]`);
       if (typeof lh === "number" && typeof size === "number") c.push(`leading-[${px(size * lh)}]`);
-      if (n.fontWeight) c.push(`font-[${n.fontWeight === "normal" ? 400 : n.fontWeight === "bold" ? 700 : n.fontWeight}]`);
+      if (weight !== undefined) c.push(`font-[${weight === "normal" ? 400 : weight === "bold" ? 700 : weight}]`);
       if (fill) c.push(`text-${fill.tw}`);
       if (n.letterSpacing) c.push(`tracking-[${px(n.resolved?.letterSpacing ?? n.letterSpacing)}]`);
     }
     if (shadow) c.push("shadow-[…] (see effect)");
+    if (fillNote) c.push(`/* ${fillNote} */`);
     return `tw: ${c.filter(Boolean).join(" ")}`;
   }
 
@@ -240,8 +280,8 @@ export function hint(model, n, parent, flavor) {
     if (fill && n.type !== "text" && n.type !== "icon") d.push(`background:${fill.css}`);
     if (typeof radius === "number") d.push(`border-radius:${px(radius)}`);
     if (n.stroke !== undefined) {
-      const s = colorOf(n.stroke, n.resolved?.stroke)?.css ?? "currentColor";
-      const sw = n.strokeWidth ?? 1;
+      const s = (stroke?.kind === "color" ? colorOf(stroke.raw, stroke.resolved) : null)?.css ?? "currentColor";
+      const sw = strokeWidth ?? 1;
       if (typeof sw === "object") for (const [side, v] of Object.entries(sw)) d.push(`border-${side}:${px(v)} solid ${s}`);
       else d.push(`border:${px(sw)} solid ${s}`);
     }
@@ -249,10 +289,11 @@ export function hint(model, n, parent, flavor) {
     if (n.type === "text") {
       if (typeof size === "number") d.push(`font-size:${px(size)}`);
       if (typeof lh === "number" && typeof size === "number") d.push(`line-height:${px(size * lh)}`);
-      if (n.fontWeight) d.push(`font-weight:${n.fontWeight}`);
+      if (weight !== undefined) d.push(`font-weight:${weight}`);
       if (fill) d.push(`color:${fill.css}`);
     }
     d.push("box-sizing:border-box");
+    if (fillNote) d.push(`/* ${fillNote} */`);
     return `css: ${d.join("; ")}`;
   }
 
@@ -272,23 +313,24 @@ export function hint(model, n, parent, flavor) {
     if (fill && n.type !== "text" && n.type !== "icon") s.push(`backgroundColor:${fill.rn}`);
     if (typeof radius === "number") s.push(`borderRadius:${num(radius)}`);
     if (n.stroke !== undefined) {
-      const sw = n.strokeWidth ?? 1;
+      const sw = strokeWidth ?? 1;
       const width = (v) => (v <= 0.5 ? "StyleSheet.hairlineWidth" : num(v));
       if (typeof sw === "object") for (const [side, v] of Object.entries(sw)) s.push(`border${side[0].toUpperCase()}${side.slice(1)}Width:${width(v)}`);
       else s.push(`borderWidth:${width(sw)}`);
-      const c = colorOf(n.stroke, n.resolved?.stroke);
+      const c = (stroke?.kind === "color" ? colorOf(stroke.raw, stroke.resolved) : null);
       if (c) s.push(`borderColor:${c.rn}`);
     }
     if (n.clip) s.push("overflow:'hidden'");
     if (n.type === "text") {
       if (typeof size === "number") s.push(`fontSize:${num(size)}`);
       if (typeof lh === "number" && typeof size === "number") s.push(`lineHeight:${num(size * lh)}`);
-      if (n.fontWeight) s.push(`fontWeight:'${n.fontWeight === "normal" ? "400" : n.fontWeight === "bold" ? "700" : n.fontWeight}'`);
+      if (weight !== undefined) s.push(`fontWeight:'${weight === "normal" ? "400" : weight === "bold" ? "700" : weight}'`);
       if (fill) s.push(`color:${fill.rn}`);
       if (n.letterSpacing) s.push(`letterSpacing:${num(n.resolved?.letterSpacing ?? n.letterSpacing)}`);
       s.push("includeFontPadding:false");
     }
     if (shadow) s.push("shadow*: iOS shadowColor/Offset/Radius/Opacity + Android elevation (match visual weight)");
+    if (fillNote) s.push(`/* ${fillNote} */`);
     return `rn: { ${s.join(", ")} }`;
   }
   return null;

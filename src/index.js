@@ -22,6 +22,8 @@ const saver = new SaveScheduler({
   onError: (file, err) => process.stderr.write(`pen-multi: background save of ${file} failed: ${err.message}\n`),
 });
 const pool = new SessionPool({ saver });
+let designTools = null; // overview/inspect; their cached analysis is dropped whenever a file is written
+const designChanged = (file) => designTools?.invalidate(file);
 const app = new AppBridge(normalize);
 
 const INSTRUCTIONS = `pen.dev editor for .pen design files (web/mobile apps and websites): read, generate, and validate designs. Covers every tool of the official pen.dev MCP server, and works with or without the pen.dev desktop app.
@@ -99,6 +101,7 @@ async function appWrite(target, name, args, send = (t, a) => app.call(name, { fi
   const warnings = saveWarning(target.file);
   const res = await timings.time("call", () => send(target, args));
   if (res.isError) return fromApp(res, target);
+  designChanged(target.file);
   if (!config.autosave) return fromApp(res, target, NOT_SAVING_NOTE);
   scheduleAppSave(target.file);
   return fromApp(res, target, [...warnings.map((w) => `WARNING: ${w}`), SAVING_NOTE].join("\n"));
@@ -302,6 +305,7 @@ tool(
       const notes = [...warnings, ...saveWarning(file)];
       if (!writes) return withHints(ok(res.text, notes, file), hints);
       session.dirty = true;
+      designChanged(file);
       if (config.autosave) scheduleHeadlessSave(session);
       return withHints(ok(`${res.text}\n\n${config.autosave ? SAVING_NOTE : NOT_SAVING_NOTE}`, notes, file), hints);
     });
@@ -388,6 +392,7 @@ async function place(dest, nodes, what) {
     const res = await session.shell.call("execute", { input });
     if (res.error) return fail(res.error, dest.file);
     session.dirty = true;
+    designChanged(dest.file);
     if (config.autosave) scheduleHeadlessSave(session);
     return ok(`${describe(res.text)}\n\n${config.autosave ? SAVING_NOTE : NOT_SAVING_NOTE}`, warnings, dest.file);
   });
@@ -541,7 +546,7 @@ tool(
   },
 );
 
-registerDesignTools({ tool, z, route, app, pool, timings, ok, fail, fromApp, textOf, optionalFilePath });
+designTools = registerDesignTools({ tool, z, route, app, pool, saver, timings, ok, fail, fromApp, textOf, optionalFilePath });
 
 let shuttingDown = false;
 async function shutdown() {

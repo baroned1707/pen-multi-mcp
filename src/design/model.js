@@ -30,9 +30,16 @@ export function buildModel(raw) {
   place(root, 0, 0);
 
   const componentOf = (id) => {
-    const link = raw.refs?.[id] ?? raw.refs?.[id.split("/").pop()];
-    if (!link) return null;
-    const [ref, overrides] = link;
+    const refs = raw.refs ?? {};
+    const segs = id.split("/");
+    const own = refs[id] ?? refs[segs.at(-1)];
+    // An ancestor instance may have swapped this nested instance for another component.
+    for (let i = 0; i < segs.length - 1; i++) {
+      const swap = refs[segs.slice(0, i + 1).join("/")]?.[2]?.[segs.slice(i + 1).join("/")];
+      if (swap) return { id: swap, name: raw.comps?.[swap] ?? swap, overrides: own?.[1] ?? [], swapped: true };
+    }
+    if (!own) return null;
+    const [ref, overrides] = own;
     return { id: ref, name: raw.comps?.[ref] ?? ref, overrides: overrides ?? [] };
   };
   for (const n of nodes.values()) {

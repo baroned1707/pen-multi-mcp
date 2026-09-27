@@ -36,7 +36,7 @@ Before every app call, pen-multi checks that the app really has the file open (i
 | `execute` | Same; `filePath` optional as in the official server |
 | `browser` | Runs in the off-screen workbench; canvas actions move the result into any file, headless or in the app. Pass `url` with any action to load and act in one step. |
 | `spawn_agents` | Runs in the app on a document open there. Otherwise, or without the app, the error tells the agent to use its own subagents on the same file. |
-| — | Extra: `open_file`, `fork_version`, `save`, `close_file`, `list_sessions` |
+| — | Extra: `overview`, `inspect` (design context), `open_file`, `fork_version`, `save`, `close_file`, `list_sessions` |
 
 `browser` and `spawn_agents` need the desktop app running (the CLI cannot run the integrated browser). Agents take turns on the workbench browser through a machine-wide lock, so one agent's page load cannot land between another agent's load and read.
 
@@ -57,6 +57,7 @@ It can run next to the official `pencil` server.
 | Tool | Purpose |
 |---|---|
 | `read_skill`, `get_style` | Same as the official server (cached; no design file needed) |
+| `overview`, `inspect` | Design context: the whole document, and one screen as data (see below) |
 | `execute` | Run a snippet against `filePath` (or the app's active document); supports `editId` + `edits` retries |
 | `get_app_state` | Document state of one file, or of the app |
 | `browser`, `spawn_agents` | App features; see above |
@@ -66,6 +67,22 @@ It can run next to the official `pencil` server.
 | `close_file`, `list_sessions` | Manage open editors |
 
 Screenshots from `TakeScreenshot` are returned as MCP image content.
+
+## Design → code: `overview` and `inspect`
+
+Agents that port a design from screenshots or memory keep the old UI and miss sections. These two tools give them the design as data; both only read.
+
+- **`overview(filePath, { focus, refresh })`**: the big picture. Every screen as a matrix of screen + state × width, with the themes each cell is drawn in and empty cells shown; canvas bands in reading order with their titles; flows between screens inferred from arrows (or declared); components and where they are used; the type and spacing scales in use; raw colors; `note`/`context` text. `focus` zooms into one screen and lists each frame's node id.
+- **`inspect(filePath, target, { depth, maxLines, flavor, format, savePath })`**: one screen or node. A breadcrumb (variants at other widths/states/themes, flows in and out, components used), the app shell (docked header, tab bar) and the sections in order with their text, then an outline with one line per node: absolute position and size, fill/hug/fixed sizing, auto-layout, colors as token name plus every theme's value, typography with line height in px, components and overrides, geometric clipping. Repeated rows collapse.
+  - `flavor: "tailwind" | "css" | "react-native"` adds a code hint per node, following pen.dev's layout rules (e.g. `fill_container` is `flex-1` in a row parent and `w-full` in a column).
+  - `format: "json"` returns everything for scripts; `"html-ref"` writes Pen's HTML export with its `box-sizing: content-box` bug fixed and layer names as `data-pen`.
+  - `savePath` writes the JSON with the `.pen`'s SHA-1, so the agent can re-read it after context compaction; a stale previous spec is reported.
+
+Screen names are parsed across conventions seen in practice (`S3 · Trang tin · sáng`, `home · day`, `★ M2 Tải file · ĐANG TẢI · 360`, `Hôm nay — rỗng`, `Vị thế — 4 mã · tablet dọc 834`); themes come from the frame's `theme` first. A `.pen-multi.json` next to the `.pen` can override with `{ "screenPattern": "<regex with named groups screen, state, width, theme>", "flows": ["path/to/flow.json"] }` (flow files hold `{ "edges": [{ "from", "to", "ev" }] }`).
+
+The server instructions add a **port mode**: the design is the source of truth; "update the existing component" means make it match; read with `inspect`, never from screenshots or memory; list structural differences (shell, navigation, section order, missing/extra elements) before editing; ask once when project rules conflict.
+
+`execute` responses carry `HINT:` lines for failures agents otherwise miss: a read that printed nothing, `console.log`, `await`, `TakeScreenshot` with a non-array, and interrupted snippets. Read-only snippets never mark a file dirty or trigger a save.
 
 ## Many agents, many projects
 

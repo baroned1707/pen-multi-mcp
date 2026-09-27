@@ -26,8 +26,9 @@ function conventions(file) {
 const fileHash = (file) => (fs.existsSync(file) ? createHash("sha1").update(fs.readFileSync(file)).digest("hex") : null);
 const mtime = (file) => (fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0);
 
-export function registerDesignTools({ tool, z, route, app, pool, timings, ok, fail, fromApp, textOf, optionalFilePath }) {
+export function registerDesignTools({ tool, z, route, app, pool, saver, timings, ok, fail, fromApp, textOf, optionalFilePath }) {
   const cache = new Map(); // file -> { key, analysis }
+  const invalidate = (file) => cache.delete(file);
 
   /** A `run(input)` for read-only snippets on the routed document. */
   const reader = (target) =>
@@ -70,22 +71,40 @@ export function registerDesignTools({ tool, z, route, app, pool, timings, ok, fa
     },
   );
 
-  /** Resolves a target: a node id, else a screen name / code from the overview matrix. */
-  async function resolveTarget(target, wanted) {
-    const { analysis } = await analysisOf(target);
+  /**
+   * Resolves a target: an exact frame id or name; else any node id that exists; else a unique
+   * screen code / partial name. Ambiguous or unknown targets list candidates instead of guessing.
+   */
+  async function resolveTarget(target, wanted, { refreshed = false } = {}) {
+    const { analysis } = await analysisOf(target, { refresh: refreshed });
     const frames = analysis.matrix.rows.flatMap((r) => Object.values(r.cells).flat().map((c) => ({ ...c, row: r })));
     const exact = frames.filter((c) => c.id === wanted || c.name === wanted);
     if (exact.length === 1) return { id: exact[0].id, frame: exact[0], analysis };
+    if (!exact.length && /^[\w-]+(\/[\w-]+)*$/.test(wanted)) {
+      try {
+        const raw = await readSubtree(reader(target), wanted);
+        return { id: wanted, frame: null, analysis, raw };
+      } catch (err) {
+        if (!/can't find node|not found|does not exist/i.test(err.message)) throw err;
+      }
+    }
     const lower = wanted.toLowerCase();
     // Exact name matches win over partial ones; two frames with the same name are still ambiguous.
     const loose = exact.length ? exact : frames.filter((c) => c.row.code?.toLowerCase() === lower || c.name.toLowerCase().includes(lower));
     if (loose.length === 1) return { id: loose[0].id, frame: loose[0], analysis };
     if (loose.length > 1) {
-      throw new ReadError(
-        `"${wanted}" matches ${loose.length} frames; pass one id:\n` + loose.slice(0, 30).map((c) => `- ${c.name} → ${c.id}`).join("\n"),
-      );
+      throw new ReadError(`"${wanted}" matches ${loose.length} frames; pass one id:\n` + loose.slice(0, 30).map((c) => `- ${c.name} → ${c.id}`).join("\n"));
     }
-    return { id: wanted, frame: null, analysis }; // any other node id (a section, a component)
+    if (!refreshed) return resolveTarget(target, wanted, { refreshed: true }); // the document may have changed
+    const words = lower.split(/[\s·—-]+/).filter((w) => w.length > 1);
+    const close = frames
+      .map((c) => ({ c, score: words.filter((w) => c.name.toLowerCase().includes(w)).length }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+    throw new ReadError(
+      `No screen or node matches "${wanted}".` + (close.length ? ` Closest screens:\n${close.map((x) => `- ${x.c.name} → ${x.c.id}`).join("\n")}` : " Call overview to list screens and their ids."),
+    );
   }
 
   function breadcrumb(analysis, frame, model) {
@@ -125,9 +144,10 @@ export function registerDesignTools({ tool, z, route, app, pool, timings, ok, fa
     },
     async ({ filePath: f, target: wanted, depth = 8, maxLines = 400, flavor, format = "outline", savePath }) => {
       const target = await route(f);
-      const { id, frame, analysis } = await resolveTarget(target, wanted);
+      const resolved = await resolveTarget(target, wanted);
+      const { id, frame, analysis } = resolved;
       const run = reader(target);
-      const raw = await readSubtree(run, id);
+      const raw = resolved.raw ?? (await readSubtree(run, id));
       const model = buildModel(raw);
       const crumb = breadcrumb(analysis, frame, model);
       const sec = sections(model);
@@ -135,24 +155,30 @@ export function registerDesignTools({ tool, z, route, app, pool, timings, ok, fa
 
       if (savePath) {
         const out = path.resolve(process.cwd(), savePath);
-        const hash = fileHash(target.file);
+        if (!/\.json$/i.test(out)) throw new ReadError(`savePath must end with .json: ${savePath}`);
+        let prev = null;
         if (fs.existsSync(out)) {
           try {
-            const prev = JSON.parse(fs.readFileSync(out, "utf8"));
-            if (prev.pen?.sha1 && prev.pen.sha1 !== hash) notes.push(`The previous spec at ${out} was stale: the design changed since ${prev.generatedAt}.`);
+            prev = JSON.parse(fs.readFileSync(out, "utf8"));
           } catch {}
+          if (!prev?.pen?.sha1) throw new ReadError(`${out} exists and is not an inspect spec; refusing to overwrite it.`);
         }
+        // Hash what is on disk after pending saves, so the hash matches the data just read.
+        await saver?.flush(target.file).catch(() => {});
+        const unsaved = Boolean(pool.sessions.get(target.file)?.dirty);
+        const hash = fileHash(target.file);
+        if (prev && prev.pen.sha1 !== hash) notes.push(`The previous spec at ${out} was stale: the design changed since ${prev.generatedAt}.`);
         fs.mkdirSync(path.dirname(out), { recursive: true });
         fs.writeFileSync(
           out,
           JSON.stringify(
             {
               generatedAt: new Date().toISOString(),
-              pen: { path: target.file, mtimeMs: mtime(target.file), sha1: hash, live: target.mode === "app" },
+              pen: { path: target.file, mtimeMs: mtime(target.file), sha1: hash, live: target.mode === "app", unsavedChangesNotHashed: unsaved || undefined },
               target: { id, name: model.root.name },
               breadcrumb: crumb,
               shell: sec.shell.map((s) => ({ name: s.node.name, where: s.where, items: s.items })),
-              sections: sec.sections.map((s) => ({ name: s.node.name, items: s.items })),
+              sections: sec.sections.map((s) => ({ name: s.node.name, fixed: s.fixed, items: s.items })),
               ...toJson(model),
             },
             null,
@@ -163,12 +189,13 @@ export function registerDesignTools({ tool, z, route, app, pool, timings, ok, fa
       }
 
       if (format === "json") {
-        const body = { target: { id, name: model.root.name }, breadcrumb: crumb, shell: sec.shell.map((s) => ({ name: s.node.name, where: s.where, items: s.items })), sections: sec.sections.map((s) => ({ name: s.node.name, items: s.items })), ...toJson(model) };
+        const body = { target: { id, name: model.root.name }, breadcrumb: crumb, shell: sec.shell.map((s) => ({ name: s.node.name, where: s.where, items: s.items })), sections: sec.sections.map((s) => ({ name: s.node.name, fixed: s.fixed, items: s.items })), ...toJson(model) };
         return wrap(target, [...notes, JSON.stringify(body)]);
       }
 
       if (format === "html-ref") {
-        const base = savePath ? path.resolve(process.cwd(), savePath).replace(/\.json$/i, "") : path.join(path.dirname(target.file), `${(model.root.name ?? id).replace(/[^\w.-]+/g, "_")}`);
+        const safe = String(model.root.name ?? id).replace(/[^\p{L}\p{N}_-]+/gu, "_").replace(/^_+|_+$/g, "") || id.replace(/\W+/g, "_");
+        const base = savePath ? path.resolve(process.cwd(), savePath).replace(/\.json$/i, "") : path.join(path.dirname(target.file), safe);
         const htmlPath = `${base}.html`;
         const res = await run(`Export(${JSON.stringify([id])}, "html-css", ${JSON.stringify(htmlPath)}, { includeLayerNames: true })`);
         if (res.error) throw new ReadError(res.error);
@@ -190,8 +217,8 @@ export function registerDesignTools({ tool, z, route, app, pool, timings, ok, fa
         "## App shell (inferred: docked to the top/bottom or named like a header/nav/tab bar)",
         ...(sec.shell.length ? sec.shell.map((s) => `- ${s.where}: ${s.node.name} — ${s.items.slice(0, 10).join(" ")}`) : ["- none"]),
         "",
-        `## Sections in order${sec.scroll ? ` (inside scroll container "${sec.scroll.name}")` : ""}`,
-        ...sec.sections.map((s, i) => `${i + 1}. ${s.node.name} — ${s.items.slice(0, 12).join(" ")}${s.items.length > 12 ? ` … +${s.items.length - 12}` : ""}`),
+        `## Sections in order${sec.scroll ? ` (scroll container "${sec.scroll.name}"; "fixed" sections sit outside it and do not scroll)` : ""}`,
+        ...sec.sections.map((s, i) => `${i + 1}. ${s.node.name}${s.fixed ? " (fixed)" : ""} — ${s.items.slice(0, 12).join(" ")}${s.items.length > 12 ? ` … +${s.items.length - 12}` : ""}`),
         "",
         "## Outline",
         ...outline(model, { depth, maxLines, flavor, continueWith: (nodeId) => `inspect({ filePath: ${JSON.stringify(target.file)}, target: ${JSON.stringify(nodeId)} })` }),
@@ -199,4 +226,5 @@ export function registerDesignTools({ tool, z, route, app, pool, timings, ok, fa
       return wrap(target, [...notes, ...lines]);
     },
   );
+  return { invalidate };
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { executeHints } from "../src/hints.js";
+import { executeHints, mayWrite } from "../src/hints.js";
 
 const OK_SILENT = "OK\n\nGlobal variables (e.g. root) carry over to subsequent calls!";
 
@@ -26,4 +26,13 @@ test("console, await, non-array screenshots and interrupted runs get a concrete 
 
 test("an unrelated error gets no hint", () => {
   assert.deepEqual(executeHints({ input: "Get('zz')", error: "Node not found: zz" }), []);
+});
+
+test("writes are recognised however the function is reached", () => {
+  for (const input of ["ids.forEach(Delete)", "const U = Update; U('a', { width: 4 })", "Update.call(null, 'a', {})", "SetVariables({ a: { type: 'number', value: 1 } })", "items.map(Insert.bind(null, 'p'))"]) {
+    assert.equal(mayWrite(input), true, input);
+  }
+  assert.equal(mayWrite('Print(Get("a").name)'), false);
+  assert.equal(mayWrite(undefined), true, "an edit retry's snippet is unknown");
+  assert.deepEqual(executeHints({ input: "ids.forEach(Delete)", text: "OK" }), [], "no 'nothing printed' hint for a write");
 });

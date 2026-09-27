@@ -21,19 +21,32 @@ export const readTree = (rootId, { maxNodes = 4000, maxDepth = 64 } = {}) => `co
 const PROPS = ${JSON.stringify(PROPS)};
 const RESOLVED = ${JSON.stringify(RESOLVED)};
 const refs = {}, comps = {};
-const scanRaw = (id) => Get(id, (n) => { if (n.type === "ref") refs[n.id] = [n.ref, Object.keys(n.descendants || {})]; if (n.reusable) comps[n.id] = n.name; return undefined; });
-scanRaw(ROOT);
+// An instance's descendants can swap a nested instance for another component ({ ref } or a whole
+// { type: "ref" } replacement); keep those so the model reports the component actually shown.
+const swaps = (d) => { const out = {}; for (const [k, v] of Object.entries(d || {})) if (v && v.ref) out[k] = v.ref; return out; };
+const scanRaw = (id, limit) => Get(id, (n, c) => {
+  if (c.depth > limit) { c.skipChildren(); return undefined; }
+  if (n.type === "ref") {
+    refs[n.id] = [n.ref, Object.keys(n.descendants || {}), swaps(n.descendants)];
+    // A { type: "ref" } replacement gets its own id: link that id to its component directly.
+    for (const v of Object.values(n.descendants || {})) if (v && v.id && v.ref) refs[v.id] = [v.ref, Object.keys(v.descendants || {}), swaps(v.descendants)];
+  }
+  if (n.reusable) comps[n.id] = n.name;
+  return undefined;
+});
+scanRaw(ROOT, ${maxDepth});
 const scanned = new Set();
 for (let more = true; more; ) {
   more = false;
-  for (const [, [ref]] of Object.entries(refs)) {
-    if (ref && !scanned.has(ref)) { scanned.add(ref); more = true; scanRaw(ref); }
+  for (const [, [ref, , sw]] of Object.entries(refs)) {
+    for (const r of [ref, ...Object.values(sw || {})]) if (r && !scanned.has(r)) { scanned.add(r); more = true; scanRaw(r, 64); }
   }
 }
 const nodes = [];
 let skipped = 0;
 Get(ROOT, (n, c) => {
-  if (nodes.length >= ${maxNodes} || c.depth > ${maxDepth}) { skipped++; c.skipChildren(); return undefined; }
+  if (c.depth > ${maxDepth}) { skipped++; c.skipChildren(); return undefined; }
+  if (nodes.length >= ${maxNodes}) { skipped++; return undefined; }
   const o = { id: n.id, parent: c.parentCtx ? c.parentCtx.node.id : null, depth: c.depth, bounds: c.bounds };
   for (const k of PROPS) if (n[k] !== undefined && n[k] !== null) o[k] = n[k];
   if (c.problems) o.problems = c.problems;
@@ -42,9 +55,9 @@ Get(ROOT, (n, c) => {
 }, { resolveInstances: true });
 const byId = {};
 for (const o of nodes) byId[o.id] = o;
-Get(ROOT, (n) => {
+Get(ROOT, (n, c) => {
   const o = byId[n.id];
-  if (!o) return undefined;
+  if (!o) { c.skipChildren(); return undefined; }
   const r = {};
   for (const k of RESOLVED) if (n[k] !== undefined && JSON.stringify(n[k]) !== JSON.stringify(o[k])) r[k] = n[k];
   if (Object.keys(r).length) o.resolved = r;

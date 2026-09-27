@@ -87,3 +87,67 @@ test("json form carries addresses, absolute bounds and components", () => {
   assert.deepEqual(t.bounds, { x: 16, y: 134, w: 200, h: 24 });
   assert.deepEqual(j.duplicateNames, ["Home/Content/List/Row"]);
 });
+
+test("a first section at the top is content, not shell; a sticky CTA outside the scroll area is kept, marked fixed", () => {
+  const m = buildModel({
+    root: "S",
+    nodes: [
+      node("S", null, [0, 0, 390, 844], { type: "frame", name: "Promo", layout: "vertical" }),
+      node("Hero", "S", [0, 0, 390, 120], { type: "frame", name: "Hero" }),
+      node("Ht", "Hero", [16, 16, 200, 30], { type: "text", name: "T", content: "Big sale" }),
+      node("Body", "S", [0, 120, 390, 604], { type: "frame", name: "Body", layout: "vertical", height: "fill_container" }),
+      node("Card", "Body", [0, 0, 390, 200], { type: "frame", name: "Card" }),
+      node("Cta", "S", [0, 724, 390, 64], { type: "frame", name: "Sticky CTA" }),
+      node("Tabs", "S", [0, 788, 390, 56], { type: "frame", name: "Tabs" }),
+    ],
+    refs: {}, comps: {}, variables: {}, themes: {},
+  });
+  const s = sections(m);
+  assert.deepEqual(s.shell.map((x) => x.node.name), ["Tabs"]);
+  assert.deepEqual(s.sections.map((x) => [x.node.name, x.fixed]), [["Hero", true], ["Card", false], ["Sticky CTA", true]]);
+});
+
+test("pinned bars (absolute at an edge) are shell even without a telling name", () => {
+  const m = buildModel({
+    root: "S",
+    nodes: [
+      node("S", null, [0, 0, 390, 844], { type: "frame", name: "Map", layout: "vertical" }),
+      node("M", "S", [0, 0, 390, 844], { type: "frame", name: "Canvas", height: "fill_container" }),
+      node("B", "S", [0, 780, 390, 64], { type: "frame", name: "Dock", layoutPosition: "absolute" }),
+    ],
+    refs: {}, comps: {}, variables: {}, themes: {},
+  });
+  assert.deepEqual(sections(m).shell.map((x) => [x.node.name, x.where]), [["Dock", "bottom"]]);
+});
+
+test("fills as objects and arrays never render as [object Object] or a comma list", () => {
+  const m = model();
+  const row = m.nodes.get("R0");
+  row.fill = { type: "color", color: "$ink" };
+  assert.match(hint(m, row, m.nodes.get("L"), "tailwind"), /bg-\[var\(--ink\)\]/);
+  assert.match(describe(m, row), /fill \$ink\(#111111 light, #EEEEEE dark\)/);
+  row.fill = ["$bg", "#000000"];
+  assert.match(hint(m, row, m.nodes.get("L"), "css"), /background:var\(--bg\).*\+1 more fills/);
+  assert.match(describe(m, row), /fill \$bg\(#FFFFFF\) \+ 1 more fill/);
+  row.fill = { type: "linear_gradient", stops: [] };
+  const h = hint(m, row, m.nodes.get("L"), "tailwind");
+  assert.doesNotMatch(h, /object|bg-\[/);
+  assert.match(h, /gradient fill \(see design\)/);
+  assert.doesNotMatch(hint(m, row, m.nodes.get("L"), "react-native"), /object Object/);
+});
+
+test("children of a group are positioned; token weights use their resolved value", () => {
+  const m = buildModel({
+    root: "S",
+    nodes: [
+      node("S", null, [0, 0, 390, 844], { type: "frame", name: "S", layout: "vertical" }),
+      node("G", "S", [10, 10, 100, 100], { type: "group", name: "Badge" }),
+      node("R", "G", [5, 6, 10, 10], { type: "rectangle", name: "Dot", width: 10, height: 10 }),
+      node("T", "S", [0, 200, 100, 20], { type: "text", name: "T", content: "x", fontWeight: "$w", resolved: { fontWeight: "600" } }),
+    ],
+    refs: {}, comps: {}, variables: { w: { type: "string", value: "600" } }, themes: {},
+  });
+  assert.match(hint(m, m.nodes.get("R"), m.nodes.get("G"), "css"), /position:absolute; left:5px; top:6px/);
+  assert.match(hint(m, m.nodes.get("T"), m.root, "css"), /font-weight:600/);
+  assert.match(describe(m, m.nodes.get("T")), /\$w\(600\)/);
+});

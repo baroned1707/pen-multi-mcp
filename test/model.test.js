@@ -54,3 +54,18 @@ test("addresses are name paths; duplicates get [i] and are reported", () => {
   assert.equal(a.get("R2"), "Screen/List/Row[2]");
   assert.deepEqual(duplicates, ["Screen/List/Row"]);
 });
+
+test("a nested instance swapped by an ancestor's override reports the component actually shown", () => {
+  const m = buildModel({
+    root: "S",
+    nodes: [
+      { id: "S", parent: null, bounds: { x: 0, y: 0, width: 100, height: 100 }, type: "frame", name: "S" },
+      { id: "card", parent: "S", bounds: { x: 0, y: 0, width: 100, height: 50 }, type: "frame", name: "Card" },
+      { id: "card/icon", parent: "card", bounds: { x: 0, y: 0, width: 10, height: 10 }, type: "frame", name: "Icon" },
+    ],
+    refs: { card: ["CCard", ["icon"], { icon: "CStar" }], icon: ["CDot", [], {}] },
+    comps: { CCard: "C/Card", CDot: "C/Dot", CStar: "C/Star" },
+  });
+  assert.equal(m.nodes.get("card/icon").component.name, "C/Star");
+  assert.equal(m.nodes.get("card").component.name, "C/Card");
+});

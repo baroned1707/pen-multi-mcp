@@ -127,3 +127,51 @@ test("html-ref writes Pen's export with box-sizing fixed and data-pen names", as
   assert.doesNotMatch(html, /content-box/);
   assert.match(html, /data-pen="Header"/);
 });
+
+test("a screen added through this server shows up immediately, without a save or refresh", async () => {
+  await call(client, "overview", { filePath: file }); // cache the analysis
+  await exec(`Insert(document, { type: "frame", name: "Settings · light", x: 1200, y: 0, width: 390, height: 844, theme: { mode: "light" } })`);
+  assert.match(text(await call(client, "overview", { filePath: file })), /^Settings \|  \| light/m);
+  const res = await call(client, "inspect", { filePath: file, target: "Settings · light" });
+  assert.ok(!res.isError, text(res));
+});
+
+test("unknown targets suggest the closest screens; a section id is inspected directly", async () => {
+  const miss = await call(client, "inspect", { filePath: file, target: "Checkot light" });
+  assert.equal(miss.isError, true);
+  assert.match(text(miss), /No screen or node matches "Checkot light"/);
+  assert.match(text(miss), /Checkout · light → \w+/);
+  const json = text(await call(client, "inspect", { filePath: file, target: "Checkout · light", format: "json" }));
+  const listId = JSON.parse(json.slice(json.indexOf("{"))).nodes.find((n) => n.name === "List").id;
+  const list = await call(client, "inspect", { filePath: file, target: listId });
+  assert.ok(!list.isError, text(list));
+  assert.match(text(list), new RegExp(`# List \\(${listId}\\)`));
+});
+
+test("a nested instance swapped through an override reports the component actually shown", async () => {
+  const star = /"C\/Star":"(\w+)"/.exec(await exec(`s = Insert(document, { type: "frame", name: "C/Star", reusable: true, x: 300, y: -600, width: 12, height: 12, fill: "$bg" }); Print(JSON.stringify({ "C/Star": s }))`))[1];
+  const ids = JSON.parse(/^I (.*)$/m.exec(await exec(`const b = Get(n => n.name === "C/Button" && n.reusable ? n.id : undefined)[0]; const dot = Get(b, { depth: 1 }).children.find(c => c.name === "Dot").id; Print("I", JSON.stringify({ b, dot }))`))[1]);
+  await exec(`Get(n => { if (n.name === "Checkout · light") { c = Get(n.id, n2 => n2.name === "Content" ? n2.id : undefined)[0]; Insert(c, { type: "ref", ref: ${JSON.stringify(ids.b)}, name: "Starred", descendants: { ${JSON.stringify(ids.dot)}: { type: "ref", ref: ${JSON.stringify(star)} } } }); } return undefined; })`);
+  const t = text(await call(client, "inspect", { filePath: file, target: "Checkout · light" }));
+  assert.match(t, /Starred \[frame ← C\/Button\]/);
+  // The replacement node takes the component's name and its own id; it must still say which component it is.
+  assert.match(t, /C\/Star \[frame ← C\/Star\]/);
+  assert.match(t, /Starred — <C\/Star> "Go"/);
+});
+
+test("a headless read-only snippet leaves the file clean", async () => {
+  await call(client, "save", { filePath: file });
+  await exec(`Print(Get(n => n.name))`);
+  const list = JSON.parse(text(await call(client, "list_sessions", {})));
+  assert.equal(list.sessions.find((s) => s.filePath === file).unsavedChanges, false);
+  assert.deepEqual(list.pendingSaves, []);
+});
+
+test("savePath refuses non-json paths and files that are not specs", async () => {
+  const bad = await call(client, "inspect", { filePath: file, target: "Checkout · light", savePath: path.join(dir, "notes.txt") });
+  assert.match(text(bad), /must end with \.json/);
+  fs.writeFileSync(path.join(dir, "package.json"), "{}");
+  const clobber = await call(client, "inspect", { filePath: file, target: "Checkout · light", savePath: path.join(dir, "package.json") });
+  assert.match(text(clobber), /not an inspect spec; refusing/);
+  assert.equal(fs.readFileSync(path.join(dir, "package.json"), "utf8"), "{}");
+});

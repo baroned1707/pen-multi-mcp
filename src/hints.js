@@ -2,12 +2,14 @@
 // a failed read that returns plain "OK" looks like success, and agents have ported whole screens
 // from memory after one (trading-agent, 2026-09-26).
 
-const WRITES = /\b(Insert|Update|Delete|Replace|Move|Copy|SetVariables|Generate)\s*\(/;
+// Any mention counts, not just a call: `ids.forEach(Delete)` and `const U = Update; U(...)` write too.
+// Treating a read as a write costs one save; treating a write as a read loses the change.
+const WRITES = /\b(Insert|Update|Delete|Replace|Move|Copy|SetVariables|Generate)\b/;
 
 /** Whether a snippet may change the document. Unknown snippets (edit retries) count as writes. */
 export const mayWrite = (input) => !input || WRITES.test(input);
 
-const DOES_SOMETHING = /\b(Insert|Update|Delete|Replace|Move|Copy|SetVariables|Generate|Export|TakeScreenshot|Print)\s*\(/;
+const DOES_SOMETHING = /\b(Insert|Update|Delete|Replace|Move|Copy|SetVariables|Generate|Export|TakeScreenshot|Print)\b/;
 
 export function executeHints({ input = "", text = "", error = null }) {
   const hints = [];
