@@ -14,6 +14,7 @@ import { Timings } from "./timing.js";
 import { carryImages, readPrinted, snippets } from "./transfer.js";
 import { FileLock, SessionPool, config, normalize, withMachineLock } from "./pool.js";
 import { cliVersion } from "./shell.js";
+import { registerDesignTools } from "./design/tools.js";
 
 const timings = new Timings();
 const saver = new SaveScheduler({
@@ -539,6 +540,8 @@ tool(
     );
   },
 );
+
+registerDesignTools({ tool, z, route, app, pool, timings, ok, fail, fromApp, textOf, optionalFilePath });
 
 let shuttingDown = false;
 async function shutdown() {
