@@ -26,6 +26,16 @@ export const slug = (s) =>
     .toLowerCase()
     .slice(0, 80) || "screen";
 
+/** A snapshot written by capture: refuses to read or overwrite anything else. */
+function isSnapshotFile(file) {
+  try {
+    const j = JSON.parse(fs.readFileSync(file, "utf8"));
+    return j && j.version === 1 && Array.isArray(j.elements) && j.viewport && typeof j.viewport.w === "number";
+  } catch {
+    return false;
+  }
+}
+
 const describeSource = (src) =>
   src.kind === "web" ? `web ${src.url}` : src.kind === "image" ? `image ${src.path}` : `${src.kind} ${src.platform}${src.device ? ` ${src.device}` : ""}${src.deepLink ? ` ${src.deepLink}` : ""}`;
 
@@ -49,6 +59,10 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
   /** Captures a source into design-verify/captures/<name>.{json,png}. */
   async function capture(src, { width, height, colorScheme, name, savePath }) {
     const base = savePath ? path.resolve(process.cwd(), savePath).replace(/\.(json|png)$/i, "") : path.join(process.cwd(), OUT_DIR, "captures", name);
+    for (const f of [`${base}.json`, `${base}.png`]) {
+      if (!fs.existsSync(f)) continue;
+      if (f.endsWith(".json") && !isSnapshotFile(f)) throw new ReadError(`${f} exists and is not a capture; refusing to overwrite it. Choose another savePath.`);
+    }
     fs.mkdirSync(path.dirname(base), { recursive: true });
     const screenshotPath = `${base}.png`;
     let snapshot;
@@ -157,7 +171,9 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       const model = buildModel(await readSubtree(run, id));
       const rootTheme = model.root.theme && typeof model.root.theme === "object" ? Object.values(model.root.theme)[0] : undefined;
       const d = designNodes(model);
-      const name = slug([model.root.name ?? id, width, theme].filter(Boolean).join("-"));
+      // The .pen's hash keeps forks of the same screen (verified by two agents at once) apart.
+      const fileTag = createHash("sha1").update(target.file).digest("hex").slice(0, 6);
+      const name = slug([model.root.name ?? id, width, theme, fileTag].filter(Boolean).join("-"));
       const outBase = path.join(process.cwd(), OUT_DIR, name);
       // Per .pen file: forks share node ids, and two agents may verify both at once.
       const renderDir = path.join(process.cwd(), OUT_DIR, ".render", createHash("sha1").update(target.file).digest("hex").slice(0, 10));
@@ -166,6 +182,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       let snapshot, snapshotPath;
       if (snapPath) {
         snapshotPath = path.resolve(process.cwd(), snapPath);
+        if (!isSnapshotFile(snapshotPath)) throw new ReadError(`${snapshotPath} is not a capture snapshot (written by capture or verify).`);
         snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
       } else {
         const viewportH = Math.min(d.frame.h, 1080);
@@ -232,6 +249,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       }
       if (!rows.length) throw new ReadError(`Nothing to draw:\n${lines.join("\n")}`);
       const out = path.resolve(process.cwd(), savePath ?? path.join(OUT_DIR, "contact-sheet.png"));
+      if (!/\.png$/i.test(out)) throw new ReadError(`savePath must end with .png: ${savePath}`);
       fs.mkdirSync(path.dirname(out), { recursive: true });
       writePng(out, contactSheet(rows));
       const preview = contactSheet(rows, 1600);

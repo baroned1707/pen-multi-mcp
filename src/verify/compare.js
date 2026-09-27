@@ -145,7 +145,7 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
       const fg = parseColor(el.fg);
       if (fg) {
         const de = deltaE(node.color, fg);
-        if (de > tol.color) add({ ...base, severity: "medium", group: "Color", kind: "text-color", message: `text color: ${toHex(fg)} in the UI, ${toHex(node.color)} in the design (ΔE ${r1(de)}) — ${who}.` });
+        if (de > tol.color) add({ ...base, severity: "medium", group: "Color", kind: node.type === "icon" ? "icon-color" : "text-color", message: `${node.type === "icon" ? "icon" : "text"} color: ${toHex(fg)} in the UI, ${toHex(node.color)} in the design (ΔE ${r1(de)}) — ${who}.` });
       }
     }
     if (node.stroke && has("border")) {

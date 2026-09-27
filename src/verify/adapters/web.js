@@ -29,16 +29,26 @@ function collect(limit) {
     const n = parseFloat(v);
     return Number.isFinite(n) ? n : undefined;
   };
+  // nth-of-type positions, computed once per parent (a list of thousands of siblings stays linear).
+  const nth = new Map();
+  const nthOf = (el) => {
+    const parent = el.parentElement;
+    if (!parent) return null;
+    if (!nth.has(parent)) {
+      const counts = {}, pos = new Map();
+      for (const c of parent.children) pos.set(c, (counts[c.tagName] = (counts[c.tagName] ?? 0) + 1));
+      nth.set(parent, { counts, pos });
+    }
+    const { counts, pos } = nth.get(parent);
+    return counts[el.tagName] > 1 ? pos.get(el) : null;
+  };
   const selector = (el) => {
     let s = el.tagName.toLowerCase();
     if (el.id) return `${s}#${el.id}`;
     const cls = [...el.classList].filter((c) => c.length < 40).slice(0, 2);
     if (cls.length) s += `.${cls.join(".")}`;
-    const parent = el.parentElement;
-    if (parent) {
-      const same = [...parent.children].filter((c) => c.tagName === el.tagName);
-      if (same.length > 1) s += `:nth-of-type(${same.indexOf(el) + 1})`;
-    }
+    const k = nthOf(el);
+    if (k) s += `:nth-of-type(${k})`;
     return s;
   };
   const path = (el) => {
@@ -68,23 +78,35 @@ function collect(limit) {
     }
     return false;
   };
-  // A paragraph whose children are all inline (links, <strong>, <br>) is one text, as the design has it.
-  // inline-block / inline-flex children (buttons, chips, badges) stay separate texts.
-  const phrasing = (el) => [...el.children].every((c) => /^(inline|contents)$/.test(getComputedStyle(c).display) && phrasing(c));
   const TEXT_INPUT = /^(text|search|email|url|tel|password|number|date|time|datetime-local|month|week|button|submit|reset)$/;
   const ICON_FONT = /material (icons|symbols)|icon|fontawesome|font awesome|ionicons|glyph/i;
+  const pageW = Math.max(document.documentElement.scrollWidth, window.innerWidth);
+  const pageH = Math.max(document.documentElement.scrollHeight, window.innerHeight);
+  // Present for assistive technology only, or parked off the page (skip links, closed drawers).
+  const offstage = (r, cs) =>
+    (r.width <= 1 && r.height <= 1) ||
+    /rect\(0(px)?,? 0(px)?,? 0(px)?,? 0(px)?\)/.test(cs.clip) ||
+    /inset\(50%/.test(cs.clipPath) ||
+    r.right + sx <= 0 || r.bottom + sy <= 0 || r.left + sx >= pageW || r.top + sy >= pageH;
+  // A paragraph whose children are all inline (links, <strong>, <br>) is one text, as the design has it.
+  // inline-block / inline-flex children (buttons, chips, badges) stay separate texts.
+  const phrasing = (el) =>
+    [...el.children].every((c) => {
+      const cs = getComputedStyle(c);
+      return /^(inline|contents)$/.test(cs.display) && !ICON_FONT.test(cs.fontFamily) && phrasing(c);
+    });
   const owned = new Set(); // elements whose text belongs to an ancestor's paragraph
 
   const visit = (el) => {
     if (out.length >= limit) return;
     const cs = getComputedStyle(el);
     if (cs.display === "none") return;
-    // checkVisibility covers hidden or transparent ancestors, content-visibility and closed <details>.
-    if (el.checkVisibility ? !el.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true }) : cs.visibility !== "visible" || Number(cs.opacity) === 0) {
-      if (cs.display !== "contents") return;
-    }
+    // visibility:hidden hides only this element (a visible child still shows): keep descending.
+    const invisible = cs.visibility !== "visible";
+    // checkVisibility covers transparent ancestors and closed <details>; those hide the whole subtree.
+    if (!invisible && (el.checkVisibility ? !el.checkVisibility({ opacityProperty: true }) : Number(cs.opacity) === 0) && cs.display !== "contents") return;
     const r = el.getBoundingClientRect();
-    const shown = r.width > 0 && r.height > 0 && !clipped(el, r, cs);
+    const shown = !invisible && r.width > 0 && r.height > 0 && !offstage(r, cs) && !clipped(el, r, cs);
     if (shown) {
       let text = "";
       if (el.tagName === "INPUT") text = TEXT_INPUT.test(el.type) ? el.value || el.placeholder || "" : "";
@@ -111,7 +133,10 @@ function collect(limit) {
       const bw = Math.max(num(cs.borderTopWidth) ?? 0, num(cs.borderRightWidth) ?? 0, num(cs.borderBottomWidth) ?? 0, num(cs.borderLeftWidth) ?? 0);
       const lh = cs.lineHeight === "normal" ? undefined : num(cs.lineHeight);
       // Text cut by ellipsis or line clamp still has its full DOM text; flag it.
-      const truncated = text && (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) && (cs.overflow !== "visible" || cs.webkitLineClamp !== "none");
+      const truncated =
+        text &&
+        ((cs.textOverflow === "ellipsis" && cs.overflowX === "hidden" && el.scrollWidth > el.clientWidth + 1) ||
+          (cs.webkitLineClamp && cs.webkitLineClamp !== "none" && el.scrollHeight > el.clientHeight + 1));
       const o = {
         i: out.length,
         parent,
@@ -123,7 +148,9 @@ function collect(limit) {
         fixed: cs.position === "fixed" || cs.position === "sticky" || undefined,
         box: { x: r.left + sx, y: r.top + sy, w: r.width, h: r.height },
         bg: cs.backgroundColor,
-        fg: text ? cs.color : undefined,
+        // Text color, or the color an icon paints (SVG fill, icon-font glyph).
+        fg: text ? cs.color : el.tagName === "svg" ? (cs.fill && cs.fill !== "none" && !/^url/.test(cs.fill) ? cs.fill : cs.color) : ICON_FONT.test(cs.fontFamily) ? cs.color : undefined,
+        icon: el.tagName === "svg" || ICON_FONT.test(cs.fontFamily) || undefined,
         fontSize: text ? num(cs.fontSize) : undefined,
         fontWeight: text ? num(cs.fontWeight) : undefined,
         lineHeight: text ? lh : undefined,
@@ -182,6 +209,8 @@ export async function captureWeb({ url, steps = [], fullPage = true, width, heig
     if (res && res.status() >= 400) throw new Error(`${url} answered HTTP ${res.status()}`);
     await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
     for (const step of steps) await runStep(page, step);
+    // content-visibility:auto sections render only near the viewport; render them all.
+    await page.addStyleTag({ content: "*{content-visibility:visible !important}" }).catch(() => {});
     if (fullPage) await revealAll(page);
     await page.evaluate(() => document.fonts?.ready);
     await page.waitForTimeout(150);

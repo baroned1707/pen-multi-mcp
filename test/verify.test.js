@@ -19,7 +19,13 @@ const exec = async (input) => {
 };
 const url = (name) => `file://${path.join(dir, name)}`;
 const verify = (args) => call(client, "verify", { filePath: file, target: "Checkout · light", ...args });
-const report = () => JSON.parse(fs.readFileSync(path.join(dir, "design-verify", "checkout-light.json"), "utf8"));
+// Output names carry a hash of the .pen path: find them by prefix.
+const out = (sub, ext) => {
+  const d = path.join(dir, "design-verify", sub);
+  const f = fs.readdirSync(d).find((n) => /^checkout-light-[0-9a-f]{6}\./.test(n) && n.endsWith(ext));
+  return path.join(d, f);
+};
+const report = () => JSON.parse(fs.readFileSync(out("", ".json"), "utf8"));
 const kinds = (rep, severity) => rep.findings.filter((f) => f.severity === severity).map((f) => `${f.kind}:${f.address ?? ""}`).sort();
 
 before(async () => {
@@ -107,17 +113,17 @@ test("without markers the same differences are found, with a hint to add markers
 });
 
 test("a saved snapshot can be verified again, and a screenshot alone gives named pixel regions", async () => {
-  const snap = path.join(dir, "design-verify", "captures", "checkout-light.json");
+  const snap = out("captures", ".json");
   const again = await verify({ snapshot: snap });
   assert.match(text(again), /3 high, 5 medium/);
-  fs.copyFileSync(path.join(dir, "design-verify", "captures", "checkout-light.png"), path.join(dir, "shot.png"));
+  fs.copyFileSync(out("captures", ".png"), path.join(dir, "shot.png"));
   const img = await verify({ source: { kind: "image", path: "shot.png", width: 390 } });
   assert.match(text(img), /score n\/a \(image only\)/);
   assert.match(text(img), /pixels differ in .* — design there: Checkout · light\/Tab bar/);
 });
 
 test("contact_sheet draws a row per report and returns the image inline", async () => {
-  const res = await call(client, "contact_sheet", { reports: ["design-verify/checkout-light.json"], savePath: "sheet.png" });
+  const res = await call(client, "contact_sheet", { reports: [out("", ".json")], savePath: "sheet.png" });
   assert.ok(!res.isError, text(res));
   const image = res.content.find((c) => c.type === "image");
   assert.equal(image.mimeType, "image/png");
@@ -174,4 +180,32 @@ customElements.define('my-el', class extends HTMLElement { constructor(){ super(
   const snap = JSON.parse(fs.readFileSync(path.join(dir, "r2-capture.json"), "utf8"));
   const texts = snap.elements.filter((e) => e.text).map((e) => e.text + (e.truncated ? " [truncated]" : "") + (e.fixed ? " [fixed]" : ""));
   assert.deepEqual(texts, ["top", "Deep section", "Escaped fixed text [fixed]", "Cancel", "OK", "Save", "Remember me", "Choice A", "A very long title that is cut [truncated]", "Revealed on scroll", "Shadow text"]);
+});
+
+test("web capture: screen-reader-only and off-page text is not shown text; content-visibility sections render; icons carry their color; scrolling text is not truncated", async () => {
+  const many = Array.from({ length: 12 }, (_, k) => `<section style="content-visibility:auto;contain-intrinsic-size:600px;height:600px"><h3>Section ${k}</h3></section>`).join("");
+  fs.writeFileSync(
+    path.join(dir, "r3.html"),
+    `<body style="margin:0"><style>.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}</style>
+     <button><svg width="16" height="16" style="fill:#DC2626"><rect width="16" height="16"/></svg><span class="sr-only">Open main menu</span></button>
+     <a href="#main" style="position:absolute;left:-9999px">Skip to content</a>
+     <nav style="position:fixed;top:0;left:0;width:280px;height:100%;transform:translateX(-100%)"><a>Home</a></nav>
+     <h1 style="overflow:hidden;line-height:1">Tight heading</h1><p style="overflow-x:auto;white-space:nowrap;width:100px">Horizontally scrolling text that is long</p>${many}</body>`,
+  );
+  const cap = await call(client, "capture", { source: { kind: "web", url: url("r3.html") }, savePath: "r3-capture" });
+  assert.ok(!cap.isError, text(cap));
+  const snap = JSON.parse(fs.readFileSync(path.join(dir, "r3-capture.json"), "utf8"));
+  const texts = snap.elements.filter((e) => e.text).map((e) => e.text + (e.truncated ? " [truncated]" : ""));
+  assert.deepEqual(texts, ["Tight heading", "Horizontally scrolling text that is long", ...Array.from({ length: 12 }, (_, k) => `Section ${k}`)]);
+  const svg = snap.elements.find((e) => e.tag === "svg");
+  assert.equal(svg.fg, "rgb(220, 38, 38)");
+  assert.equal(svg.icon, true);
+});
+
+test("capture refuses to overwrite a file that is not a capture", async () => {
+  fs.writeFileSync(path.join(dir, "keep.json"), JSON.stringify({ name: "precious" }));
+  const res = await call(client, "capture", { source: { kind: "web", url: url("faithful.html") }, savePath: "keep.json" });
+  assert.equal(res.isError, true);
+  assert.match(text(res), /not a capture; refusing to overwrite/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "keep.json"), "utf8")).name, "precious");
 });

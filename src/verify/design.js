@@ -78,8 +78,9 @@ export function designNodes(model) {
           box: { ...n.abs },
           text: kind === "text" ? String(r.content ?? n.content) : undefined,
           fixedWidth: kind === "text" ? /^fixed/.test(n.textGrowth ?? "") : undefined,
-          fill: kind === "text" ? undefined : colorOf(n.fill, r.fill),
-          color: kind === "text" ? colorOf(n.fill, r.fill) : undefined,
+          // A text's and an icon's fill is the color of its glyphs, not a background.
+          fill: kind === "text" || n.type === "icon" ? undefined : colorOf(n.fill, r.fill),
+          color: kind === "text" || n.type === "icon" ? colorOf(n.fill, r.fill) : undefined,
           fontSize: kind === "text" ? size : undefined,
           fontWeight: kind === "text" ? (weightOf(r.fontWeight ?? n.fontWeight) ?? 400) : undefined, // unset is normal
           lineHeight: kind === "text" && size && lh ? size * lh : undefined,

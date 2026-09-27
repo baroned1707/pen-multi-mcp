@@ -78,3 +78,20 @@ export function nodesAt(design, region, limit = 3) {
     .slice(0, limit)
     .map((x) => x.n);
 }
+
+/**
+ * Whether a matched element looks different from its design node, comparing the two boxes'
+ * pixels directly (for elements that moved with their anchor on a wider device, or fixed bars).
+ * `uiScaled` is the screenshot already at the design render's density.
+ */
+export function boxDiffers(designImg, k, dBox, uiScaled, uBox, { cell = 6, threshold = 15, share = 0.15 } = {}) {
+  const px = (b) => ({ x: b.x * k, y: b.y * k, w: b.w * k, h: b.h * k });
+  const a = crop(designImg, px(dBox));
+  let b = crop(uiScaled, px(uBox));
+  if (!a.width || !a.height || !b.width || !b.height) return false;
+  if (b.width !== a.width || b.height !== a.height) b = resize(b, a.width, a.height);
+  const ma = cellMeans(a, cell), mb = cellMeans(b, cell);
+  let bad = 0;
+  for (let i = 0; i < ma.cells.length; i++) if (deltaE(rgb(ma.cells[i]), rgb(mb.cells[i])) > threshold) bad++;
+  return bad / ma.cells.length > share;
+}

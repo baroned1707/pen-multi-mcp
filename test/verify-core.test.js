@@ -370,3 +370,34 @@ test("pen-probe reads the current fiber, not the stale alternate, even when a ba
   liveRoot.child = toast;
   assert.equal(currentFiber(stale), fresh);
 });
+
+test("icons: their fill is the glyph color, compared with the UI's icon color, never with the background", async () => {
+  const { designNodes } = await import("../src/verify/design.js");
+  const root = { id: "r", name: "S", type: "frame", abs: { x: 0, y: 0, w: 390, h: 844 }, children: [] };
+  const icon = { id: "i", name: "Menu", type: "icon", abs: { x: 16, y: 16, w: 24, h: 24 }, children: [], fill: "#111111" };
+  root.children.push(icon);
+  const d = designNodes({ root, nodes: new Map([[root.id, root], [icon.id, icon]]), isToken: () => false, token: () => null });
+  const n = d.nodes.find((x) => x.id === "i");
+  assert.equal(n.fill, undefined);
+  assert.equal(toHex(n.color), "#111111");
+  const ui = { elements: [{ i: 0, tag: "svg", icon: true, marker: "Menu", box: { x: 16, y: 16, w: 24, h: 24 }, bg: "rgba(0, 0, 0, 0)", fg: "rgb(17, 17, 17)" }] };
+  const m = match(d, ui);
+  assert.deepEqual(compare(d, ui, m, { fields: FIELDS }), []);
+  ui.elements[0].fg = "rgb(220, 38, 38)";
+  assert.deepEqual(compare(d, ui, match(d, ui), { fields: FIELDS }).map((f) => f.kind), ["icon-color"]);
+});
+
+test("a wider device: a matched leaf that looks different is still reported (box-to-box pixels)", () => {
+  const d = design();
+  d.nodes.push(node("avatar", "box", { x: 350, y: 12, w: 32, h: 32 }, { name: "Avatar", fill: parseColor("#2563EB") }));
+  const ui = faithfulUi();
+  const W = 411, extra = W - 390;
+  for (const el of ui.elements) if (el.box.w >= 358) el.box.w += extra;
+  ui.elements.push({ i: ui.elements.length, tag: "img", marker: "Avatar", box: { x: 350 + extra, y: 12, w: 32, h: 32 }, bg: "#2563EB" });
+  const designImg = blank(390, 100, [255, 255, 255]);
+  for (let y = 12; y < 44; y++) for (let x = 350; x < 382; x++) designImg.data.set([37, 99, 235, 255], (y * 390 + x) * 4);
+  const shot = blank(W, 100, [255, 255, 255]);
+  for (let y = 12; y < 44; y++) for (let x = 371; x < 403; x++) shot.data.set([22, 163, 74, 255], (y * W + x) * 4); // a green picture instead
+  const res = verifyScreen({ design: { ...d, nodes: d.nodes.filter((n) => n.box.y < 60) }, snapshot: { viewport: { w: W, h: 100 }, elements: ui.elements.filter((e) => e.box.y < 60 || e.tag === "img"), fields: FIELDS }, designImg, uiImg: shot });
+  assert.ok(res.findings.some((f) => f.kind === "pixels" && f.designId === "avatar"), JSON.stringify(res.findings.map((f) => f.message)));
+});

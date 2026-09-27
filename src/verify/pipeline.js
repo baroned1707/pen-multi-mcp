@@ -2,7 +2,8 @@
 // add pixel regions, number the findings, and summarize.
 import { compare, sortFindings, summarize } from "./compare.js";
 import { match } from "./match.js";
-import { nodesAt, pixelRegions } from "./visual.js";
+import { resize } from "./image.js";
+import { boxDiffers, nodesAt, pixelRegions } from "./visual.js";
 
 const FIELD_NAMES = { text: "text", bg: "fill color", fg: "text color", fontSize: "font size", fontWeight: "font weight", lineHeight: "line height", radius: "corner radius", border: "borders" };
 
@@ -37,14 +38,23 @@ export function verifyScreen({ design, snapshot, designImg, uiImg, tolerance }) 
     // element comparison accepted; their pixels (at both places) are not differences.
     // Only leaves (texts, icons, instances, shapes without compared contents): ignoring a section
     // would hide whatever inside it differs. Fixed bars drawn against the viewport likewise.
+    // Their pixels are compared box to box instead, so a wrong image or icon is still caught.
     if (!imageOnly) {
       const wider = ui.viewportW && Math.abs(ui.viewportW - design.frame.w) > 2;
       const flaggedIds = new Set(findings.filter((f) => f.designId).map((f) => f.designId));
       const hasInside = new Set(design.nodes.flatMap((n) => n.ancestors ?? []));
+      const k = designImg.width / design.frame.w;
+      let uiScaled = null;
       for (const [id, p] of matched.pairs) {
         const n = design.nodes.find((x) => x.id === id);
         if (flaggedIds.has(id) || p.how === "content" || n.kind === "section" || n.kind === "shell" || hasInside.has(id)) continue;
-        if (wider || p.el.fixed) ignore.push(n.box, p.el.box);
+        if (!wider && !p.el.fixed) continue;
+        ignore.push(n.box, p.el.box);
+        if (n.kind === "text") continue; // texts were compared as text
+        uiScaled ??= resize(uiImg, Math.round((snapshot.viewport?.w ?? design.frame.w) * k));
+        if (boxDiffers(designImg, k, n.box, uiScaled, p.el.box)) {
+          findings.push({ severity: "medium", group: "Visual", kind: "pixels", designId: id, uiIndex: p.el.i, box: p.el.box, message: `pixels differ inside ${n.address ?? n.name} (${id}): the element is where it belongs but does not look like the design (image, icon or drawing).` });
+        }
       }
     }
     const opts = imageOnly ? { cell: 8, threshold: 12 } : { cell: 12, threshold: 15, minCells: 3 };
