@@ -93,6 +93,7 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 - **Busy files are never evicted**: a file stays open from the moment a call for it arrives until that call finishes, so subagents sharing one server cannot pull a file away from each other. Calls on the same file run one at a time.
 - **Memory limits**: at most `PEN_MULTI_MAX_SESSIONS` (4) files per agent and `PEN_MULTI_GLOBAL_MAX_SESSIONS` (8) machine-wide. When full, the least recently used idle file of that agent is saved and closed; if none is idle, the call waits up to `PEN_MULTI_WAIT_FOR_SLOT_SECONDS` (120), then fails with a list of which agents hold which files. `list_sessions` shows the machine-wide picture.
 - **Shared skill cache**: `read_skill`/`get_style` answers are cached in `~/.pen-multi/cache/<cli version>/` for all agents, so agents do not start an editor just to read docs.
+- **Pre-warm**: 2 s after a server starts, it starts an editor for the project's design file (the only `*.pen` in the project root, or the files listed as `"prewarm": ["design/app.pen"]` in `.pen-multi.json` there), so the first call skips editor startup (~2 s → ~0.4 s). The warm editor takes no file lock and blocks no one; it counts toward the machine-wide limit, is closed first when a slot is needed, is reopened if the file changed on disk before the first call, and closes after `PEN_MULTI_PREWARM_MINUTES` (3) unused. Only one process pre-warms a given file, and files open in the app are skipped. `list_sessions` shows it as `starting`, then `warm`.
 - **Slow machines**: an editor starts in ~3 s normally, but took 25–30 s in testing on a heavily loaded machine. If tool calls time out on the client side, raise the client's MCP tool timeout (for Claude Code, the `MCP_TOOL_TIMEOUT` environment variable, in ms).
 
 ## Behaviour
@@ -101,7 +102,8 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 - **App state**: the list of app windows is read on every call; the app's active document is cached for `PEN_MULTI_APP_STATE_TTL_MS` (2000 ms) and re-read whenever a write depends on it. `list_sessions` reports median/p90 timings for routing, calls and saves.
 - **Timeouts**: a call that runs past `PEN_MULTI_CALL_TIMEOUT_MS` stops that file's editor (its late output would otherwise leak into the next call); the next call reopens the file from disk.
 - **Paths** are resolved through symlinks, so `/tmp/x.pen` and `/private/tmp/x.pen` share one editor and one lock.
-- **Idle files** close after 15 minutes. Each open file costs roughly 500–650 MB of RAM.
+- **Idle files** close after 15 minutes. Each open file costs roughly 400–650 MB of RAM.
+- **Call cost**: every `execute` costs ~330 ms inside the CLI however little it does, so batch related reads and writes into one snippet. `overview` reads the whole document in one call.
 - **Snippet run time**: the CLI's sandbox interrupts a snippet that runs for too long (`InternalError: interrupted`); split long work into several `execute` calls.
 - **Desktop app**: a file open in the app is edited in the app, never headlessly. If a file is already open headlessly when the user opens it in the app, calls are refused until one side lets go, instead of the two editors overwriting each other. A file another agent holds headlessly is never pulled into the app. The server also warns when a source file is 0 bytes on disk (its content may exist only unsaved in the app).
 - `Export()` relative paths resolve next to the `.pen` file. Generated images are written to `images/` next to it.
@@ -117,6 +119,9 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 | `PEN_MULTI_STARTUP_TIMEOUT_MS` | `180000` | Editor startup timeout |
 | `PEN_MULTI_IDLE_MINUTES` | `15` | Idle time before a file is saved and closed |
 | `PEN_MULTI_CALL_TIMEOUT_MS` | `300000` | Per-call timeout |
+| `PEN_MULTI_PREWARM` | `1` | `0` never starts an editor ahead of use |
+| `PEN_MULTI_PREWARM_MINUTES` | `3` | How long an unused pre-warmed editor stays open |
+| `PEN_MULTI_PREWARM_DELAY_MS` | `2000` | Delay after server start before pre-warming |
 | `PEN_MULTI_HOME` | `~/.pen-multi` | Locks and the shared cache |
 | `PEN_CLI_PATH` | bundled dependency | Path to another `@pen.dev/cli` `dist/index.mjs` |
 | `PEN_MULTI_APP` | `1` | `0` never uses the desktop app |
@@ -136,6 +141,14 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 - `spawn_agents` has only been tested against a fake app; its designer agents run on the app's own AI settings.
 - Responses are read from the CLI's interactive shell output, so a CLI update could change the format. The CLI version is pinned in `package.json`; run `npm test` after bumping it.
 - `Generate(...)`, `get_style` and login go through pen.dev's backend like the app does.
+
+## Benchmark
+
+```bash
+npm run bench -- path/to/a.pen [path/to/b.pen ...]   # works on temp copies; the originals are never touched
+```
+
+Reports per file: first open, read, write, save, `overview` cold/cached, `inspect`; then all files edited in parallel by separate server processes, the same-file conflict latency, that every write reached disk, and the first call on a pre-warmed file. Run it before and after performance changes.
 
 ## Tests
 

@@ -17,6 +17,8 @@ export const config = {
   idleMs: envInt("PEN_MULTI_IDLE_MINUTES", 15) * 60_000,
   waitForSlotMs: envInt("PEN_MULTI_WAIT_FOR_SLOT_SECONDS", 120) * 1000,
   autosave: process.env.PEN_MULTI_AUTOSAVE !== "0",
+  prewarm: process.env.PEN_MULTI_PREWARM !== "0",
+  prewarmMs: envInt("PEN_MULTI_PREWARM_MINUTES", 3) * 60_000,
   home,
   lockDir: path.join(home, "locks"),
   cacheDir: path.join(home, "cache"),
@@ -147,11 +149,11 @@ export async function withMachineLock(name, fn, { waitMs = config.waitForSlotMs 
 }
 
 class Session {
-  constructor({ file, inPath }) {
+  constructor({ file, inPath, shell }) {
     this.file = file;
     this.inPath = inPath;
     this.lock = new FileLock(file);
-    this.shell = new PenShell({ inPath, outPath: file });
+    this.shell = shell ?? new PenShell({ inPath, outPath: file });
     this.dirty = false;
     this.lastUsed = Date.now();
     this.openedAt = new Date().toISOString();
@@ -159,12 +161,18 @@ class Session {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const statKey = (file) => {
+  const st = fs.statSync(file);
+  return `${st.mtimeMs}:${st.size}`;
+};
 
 export class SessionPool {
   constructor({ saver } = {}) {
     this.saver = saver; // background saves to flush before a session closes
     this.sessions = new Map();
     this.pending = new Map();
+    // file -> an editor started ahead of use, without the file lock (see prewarm).
+    this.warm = new Map();
     // file -> number of tool calls using it. Counted from the moment a call arrives, before its
     // file is even open, so a file can never be evicted between being opened and being used.
     this.inUse = new Map();
@@ -231,14 +239,30 @@ export class SessionPool {
         );
       }
     }
-    new FileLock(file).assertNotHeldElsewhere(); // fail fast, before waiting for a slot
-    await this.#makeRoom();
-    const session = new Session({ file, inPath: source });
-    session.lock.acquire();
+    const warm = this.#takeWarm(file);
+    let shell;
+    try {
+      new FileLock(file).assertNotHeldElsewhere(); // fail fast, before waiting for a slot
+      if (warm && source === file && (await warm.ready) && !warm.shell.stopped && statKey(file) === warm.stat) {
+        warm.marker.release(); // its slot passes to the session below
+        shell = warm.shell;
+      }
+    } finally {
+      if (warm && !shell) await this.#discardWarm(warm);
+    }
+    const session = new Session({ file, inPath: source, shell });
+    try {
+      await this.#makeRoom();
+      session.lock.acquire();
+    } catch (err) {
+      shell?.kill(); // an adopted warm editor would otherwise outlive the failed open
+      throw err;
+    }
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      await session.shell.start();
+      if (!shell) await session.shell.start();
     } catch (err) {
+      if (shell) shell.kill();
       session.lock.release();
       throw err;
     }
@@ -250,6 +274,64 @@ export class SessionPool {
     };
     this.sessions.set(file, session);
     return { session, warnings };
+  }
+
+  /**
+   * Starts an editor for `file` before any call needs it, so the first call skips CLI startup.
+   * It holds only a "warm:" marker (counted toward the machine-wide limit, one per file across
+   * processes), never the file lock, so it blocks no one. Returns whether an editor was started.
+   */
+  async prewarm(file) {
+    if (!config.prewarm || !fs.existsSync(file)) return false;
+    if (this.sessions.has(file) || this.pending.has(file) || this.warm.has(file)) return false;
+    if (this.sessions.size >= config.maxSessions || FileLock.live().length >= config.globalMaxSessions) return false;
+    try {
+      new FileLock(file).assertNotHeldElsewhere();
+    } catch {
+      return false;
+    }
+    const marker = new FileLock(`warm:${file}`);
+    try {
+      marker.acquire();
+    } catch {
+      return false; // another process pre-warmed it
+    }
+    const entry = { marker, stat: statKey(file), shell: new PenShell({ inPath: file, outPath: file }) };
+    entry.ready = entry.shell.start().then(
+      () => (entry.started = true),
+      () => false,
+    );
+    this.warm.set(file, entry);
+    entry.timer = setTimeout(() => this.#closeWarm(file), config.prewarmMs);
+    entry.timer.unref();
+    entry.shell.onExit = () => {
+      if (this.warm.get(file) === entry) this.#closeWarm(file);
+    };
+    if (!(await entry.ready)) {
+      if (this.warm.get(file) === entry) await this.#closeWarm(file);
+      return false;
+    }
+    return true;
+  }
+
+  /** Removes the warm editor for `file` from the pool and returns it, or null. */
+  #takeWarm(file) {
+    const entry = this.warm.get(file);
+    if (!entry) return null;
+    this.warm.delete(file);
+    clearTimeout(entry.timer);
+    return entry;
+  }
+
+  async #discardWarm(entry) {
+    entry.shell.onExit = null;
+    await entry.shell.close().catch(() => {});
+    entry.marker.release();
+  }
+
+  async #closeWarm(file) {
+    const entry = this.#takeWarm(file);
+    if (entry) await this.#discardWarm(entry);
   }
 
   async save(session) {
@@ -275,18 +357,20 @@ export class SessionPool {
 
   async closeAll() {
     clearInterval(this.sweeper);
-    await Promise.allSettled([...this.sessions.keys()].map((f) => this.close(f)));
+    await Promise.allSettled([...this.sessions.keys()].map((f) => this.close(f)).concat([...this.warm.keys()].map((f) => this.#closeWarm(f))));
   }
 
   list() {
+    const warm = [...this.warm].map(([file, w]) => ({ filePath: file, state: w.started ? "warm" : "starting" }));
     return [...this.sessions.values()].map((s) => ({
       filePath: s.file,
+      state: "open",
       seededFrom: s.inPath && s.inPath !== s.file ? s.inPath : undefined,
       unsavedChanges: s.dirty,
       busy: this.busy(s.file),
       openedAt: s.openedAt,
       idleSeconds: Math.round((Date.now() - s.lastUsed) / 1000),
-    }));
+    })).concat(warm);
   }
 
   /**
@@ -301,6 +385,11 @@ export class SessionPool {
       const globalFull = FileLock.live().length >= config.globalMaxSessions;
       if (!localFull && !globalFull) return;
 
+      const [warm] = this.warm.keys();
+      if (warm) {
+        await this.#closeWarm(warm); // an editor nobody uses yet goes first
+        continue;
+      }
       const [idle] = [...this.sessions.values()].filter((s) => !this.busy(s.file)).sort((a, b) => a.lastUsed - b.lastUsed);
       if (idle) {
         await this.close(idle.file);

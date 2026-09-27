@@ -1,6 +1,6 @@
 // Drives the read snippets through a `run(input) -> { text, error }` function (headless shell or
 // the app), splitting reads that the engine interrupts for running too long.
-import { readRoots, readStats, readTree } from "./snippets.js";
+import { readOverviewAll, readRoots, readStats, readTree } from "./snippets.js";
 
 export class ReadError extends Error {}
 
@@ -52,8 +52,16 @@ async function readWithin(run, rootId, budget) {
   return merged;
 }
 
-/** Root nodes, variables, and per-root statistics read in batches (halved when interrupted). Each engine call costs ~400 ms however little it reads, so batches are large. */
+/**
+ * Root nodes, variables, and per-root statistics. Each engine call costs ~400 ms however little it
+ * reads, so everything is read in one call; if that is interrupted, roots first, then statistics in
+ * large batches halved on interruption.
+ */
 export async function readOverview(run, { batch = 600 } = {}) {
+  const all = await run(readOverviewAll());
+  if (!all.error) return { data: printed(all.text, "ROOTS"), stats: printed(all.text, "STATS"), unavailable: [] };
+  if (!interrupted(all.error)) throw new ReadError(all.error);
+
   const res = await run(readRoots());
   if (res.error) throw new ReadError(res.error);
   const data = printed(res.text, "ROOTS");

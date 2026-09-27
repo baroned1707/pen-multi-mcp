@@ -13,6 +13,7 @@ import { SaveScheduler } from "./saver.js";
 import { Timings } from "./timing.js";
 import { carryImages, readPrinted, snippets } from "./transfer.js";
 import { FileLock, SessionPool, config, normalize, withMachineLock } from "./pool.js";
+import { prewarm } from "./prewarm.js";
 import { cliVersion } from "./shell.js";
 import { registerDesignTools } from "./design/tools.js";
 
@@ -50,9 +51,10 @@ Implementing or refactoring UI from a design (port mode):
 Many agents and projects:
 - Relative filePaths resolve against this agent's working directory (${process.cwd()}).
 - A file can be edited headlessly by only one agent at a time; the error names the agent's project holding it. fork_version copies a file so you can work on a separate version in parallel.
-- Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.`;
+- Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
+- Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "0.6.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "0.7.0" }, { instructions: INSTRUCTIONS });
 
 const filePath = z
   .string()
@@ -529,12 +531,17 @@ tool(
     const sessions = pool.list().filter((s) => s.filePath !== utilityFile);
     const machineWide = FileLock.live()
       .filter((h) => h.file !== utilityFile)
-      .map((h) => ({ filePath: h.file, agentProject: h.cwd, pid: h.pid, since: h.since, thisAgent: h.pid === process.pid }));
+      .map((h) => {
+        const warm = h.file.startsWith("warm:");
+        const filePath = warm ? h.file.slice(5) : h.file;
+        return { filePath, ...(warm ? { state: "warm" } : {}), agentProject: h.cwd, pid: h.pid, since: h.since, thisAgent: h.pid === process.pid };
+      });
     const limits = {
       perAgent: config.maxSessions,
       machineWide: config.globalMaxSessions,
       idleCloseMinutes: config.idleMs / 60_000,
       autosave: config.autosave,
+      prewarm: config.prewarm ? `${config.prewarmMs / 60_000} min` : "off",
     };
     const desktopApp = (await app.available())
       ? { running: true, activeDocument: await app.activeFile().catch(() => null), openDocuments: [...(await app.openFiles())] }
@@ -565,3 +572,9 @@ process.on("SIGTERM", shutdown);
 process.stdin.on("close", shutdown);
 
 await server.connect(new StdioServerTransport());
+
+// Start the project's design file editor while the agent is still reading, so its first call
+// does not wait for the CLI to start. Delayed so it does not compete with the host starting up.
+setTimeout(() => {
+  if (!shuttingDown) prewarm({ pool, app, normalize });
+}, Number(process.env.PEN_MULTI_PREWARM_DELAY_MS ?? 2000)).unref();

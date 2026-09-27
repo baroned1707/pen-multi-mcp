@@ -2,6 +2,7 @@
 // tested deterministically. Mimics the real shell's prompt and output shape.
 //   FAKE_STARTUP_MS    delay before the first prompt
 //   SLOW:<ms>          in a snippet: answer after <ms>, printing LATE
+//   FAKE_SPAWN_LOG     append "<file>" to this path each time an editor starts
 //   -a <app> -i <file> app mode: save() touches <file> only if the fake app (FAKE_ACTIVE_FILE)
 //                      has it open, yet always prints "Saved", like the real CLI
 import fs from "node:fs";
@@ -10,6 +11,7 @@ import readline from "node:readline";
 const arg = (flag) => (process.argv.includes(flag) ? process.argv[process.argv.indexOf(flag) + 1] : undefined);
 const appMode = Boolean(arg("-a"));
 const file = arg("-o") ?? arg("-i");
+if (process.env.FAKE_SPAWN_LOG) fs.appendFileSync(process.env.FAKE_SPAWN_LOG, `${file}\n`);
 const prompt = () => process.stdout.write("\x1b[36mpen\x1b[39m \x1b[2m>\x1b[22m ");
 
 function saveInApp() {

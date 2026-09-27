@@ -54,6 +54,7 @@ test("other engine errors are not retried", async () => {
 test("statistics batches are halved on interruption down to single roots", async () => {
   const roots = Array.from({ length: 5 }, (_, i) => ({ id: `r${i}`, type: "frame", name: `r${i}`, bounds: { x: 0, y: i * 1000, width: 390, height: 844 } }));
   const run = async (input) => {
+    if (input.includes("const IDS = Get(")) return { error: "InternalError: interrupted" }; // the one-call read
     if (input.includes('Print("ROOTS"')) return { text: `ROOTS ${JSON.stringify({ roots, variables: {}, themes: {} })}` };
     const ids = JSON.parse(/const IDS = (\[.*?\]);/.exec(input)[1]);
     if (ids.length > 2 || ids.includes("r4")) return { error: "InternalError: interrupted" };
@@ -62,6 +63,21 @@ test("statistics batches are halved on interruption down to single roots", async
   const { stats, unavailable } = await readOverview(run, { batch: 5 });
   assert.deepEqual(Object.keys(stats).sort(), ["r0", "r1", "r2", "r3"]);
   assert.deepEqual(unavailable, ["r4"]);
+});
+
+test("overview reads roots and statistics in one engine call when it is not interrupted", async () => {
+  const inputs = [];
+  const roots = [{ id: "r0", type: "frame", name: "r0", bounds: { x: 0, y: 0, width: 390, height: 844 } }];
+  const run = async (input) => {
+    inputs.push(input);
+    return { text: `OK\n\n## Print output\nROOTS ${JSON.stringify({ roots, variables: {}, themes: {} })}\nSTATS ${JSON.stringify({ r0: { nodes: 3, refs: {} } })}` };
+  };
+  const { data, stats, unavailable } = await readOverview(run);
+  assert.equal(inputs.length, 1);
+  assert.match(inputs[0], /const IDS = Get\(/);
+  assert.deepEqual(data.roots.map((r) => r.id), ["r0"]);
+  assert.equal(stats.r0.nodes, 3);
+  assert.deepEqual(unavailable, []);
 });
 
 test("the node budget holds across split reads, and what was left out is counted", async () => {

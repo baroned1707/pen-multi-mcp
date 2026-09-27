@@ -85,7 +85,9 @@ Print("ROOTS", JSON.stringify({ roots: out, variables: v.variables || {}, themes
  * Per-root statistics without expanding instances: instance counts per component, reusable nodes,
  * font sizes, spacing values, raw vs token fills, notes and label text inside frames.
  */
-export const readStats = (ids) => `const IDS = ${JSON.stringify(ids)};
+export const readStats = (ids) => statsOf(JSON.stringify(ids));
+
+const statsOf = (idsExpr) => `const IDS = ${idsExpr};
 const out = {};
 for (const id of IDS) {
   const s = { nodes: 0, refs: {}, reusable: [], fontSizes: [], spacing: [], rawFills: {}, tokenFills: 0, notes: [], labels: [] };
@@ -105,3 +107,11 @@ for (const id of IDS) {
   out[id] = s;
 }
 Print("STATS", JSON.stringify(out));`;
+
+/** readRoots and readStats for every root frame/group in one engine call (each ~330 ms). */
+export const readOverviewAll = () => `{
+${readRoots()}
+}
+{
+${statsOf('Get((n, c) => { c.skipChildren(); return n.type === "frame" || n.type === "group" ? n.id : undefined; })')}
+}`;
