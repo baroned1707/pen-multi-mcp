@@ -53,12 +53,40 @@ Get(ROOT, (n) => {
 const v = GetVariables();
 Print("TREE", JSON.stringify({ root: ROOT, nodes, skipped, refs, comps, variables: v.variables || {}, themes: v.themes || {} }));`;
 
-/** Root nodes with their geometry and a light summary, for overview. */
+/** Root nodes with geometry, text content, and path geometry for arrows, for overview. */
 export const readRoots = () => `const out = [];
 Get((n, c) => {
   c.skipChildren();
-  out.push({ id: n.id, type: n.type, name: n.name, reusable: !!n.reusable, theme: n.theme || null, placeholder: !!n.placeholder,
-    content: n.type === "text" || n.type === "note" || n.type === "context" ? n.content : undefined, bounds: c.bounds });
+  out.push({ id: n.id, type: n.type, name: n.name, reusable: !!n.reusable, theme: n.theme || null,
+    content: n.type === "text" || n.type === "note" || n.type === "context" ? n.content : undefined,
+    geometry: n.type === "path" ? n.geometry : undefined, viewBox: n.type === "path" ? n.viewBox : undefined,
+    bounds: c.bounds });
   return undefined;
-});
-Print("ROOTS", JSON.stringify(out));`;
+}, { includePathGeometry: true });
+const v = GetVariables();
+Print("ROOTS", JSON.stringify({ roots: out, variables: v.variables || {}, themes: v.themes || {} }));`;
+
+/**
+ * Per-root statistics without expanding instances: instance counts per component, reusable nodes,
+ * font sizes, spacing values, raw vs token fills, notes and label text inside frames.
+ */
+export const readStats = (ids) => `const IDS = ${JSON.stringify(ids)};
+const out = {};
+for (const id of IDS) {
+  const s = { nodes: 0, refs: {}, reusable: [], fontSizes: [], spacing: [], rawFills: {}, tokenFills: 0, notes: [], labels: [] };
+  Get(id, (n, c) => {
+    s.nodes++;
+    if (n.type === "ref" && n.ref) s.refs[n.ref] = (s.refs[n.ref] || 0) + 1;
+    if (n.reusable && c.depth > 0) s.reusable.push([n.id, n.name]);
+    if (n.type === "text" && n.fontSize !== undefined) s.fontSizes.push(n.fontSize);
+    if (n.gap !== undefined) s.spacing.push(n.gap);
+    if (n.padding !== undefined) for (const p of [].concat(n.padding)) s.spacing.push(p);
+    for (const f of [].concat(n.fill === undefined ? [] : n.fill)) {
+      if (typeof f === "string") { if (f.startsWith("$")) s.tokenFills++; else s.rawFills[f] = (s.rawFills[f] || 0) + 1; }
+    }
+    if ((n.type === "note" || n.type === "context") && n.content) s.notes.push(String(n.content).slice(0, 300));
+    return undefined;
+  });
+  out[id] = s;
+}
+Print("STATS", JSON.stringify(out));`;

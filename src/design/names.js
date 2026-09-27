@@ -17,6 +17,9 @@ const isUpperWord = (t) => t === t.toUpperCase() && t !== t.toLowerCase() && !CO
 function widthOf(token, frameWidth) {
   const wh = /^(\d{3,4})\s*[×x]\s*\d{3,4}$/.exec(token);
   if (wh) return Number(wh[1]);
+  // "desktop 1280", "tablet 768", "1280px"
+  const labelled = /^(?:(?:desktop|tablet|mobile|phone|web|laptop|khổ)\s+)?(\d{3,4})\s*(?:px)?$/i.exec(token);
+  if (labelled && labelled[0] !== labelled[1]) return Number(labelled[1]);
   if (/^\d{3,4}$/.test(token)) {
     const n = Number(token);
     if (KNOWN_WIDTHS.has(n) || Math.abs(n - frameWidth) <= 2) return n;

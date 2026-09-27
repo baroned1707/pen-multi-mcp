@@ -83,3 +83,11 @@ test("labels and flow captions are not screens", () => {
   const p2p = buildMatrix(frames("p2p"));
   assert.deepEqual(p2p.widths, [360, 768, 1280]);
 });
+
+test("labelled widths ('desktop 1280', 'tablet 768') join their screen's row", () => {
+  assert.deepEqual(parseScreenName("S1 · Bản đồ · desktop 1280 · sáng", { width: 1280 }), {
+    code: "S1", screen: "S1 · Bản đồ", state: null, width: 1280, theme: "sáng",
+  });
+  assert.equal(parseScreenName("S14 · Đăng bậc 0 · tablet 768 · tối", { width: 768 }).width, 768);
+  assert.equal(parseScreenName("S1 · Bản đồ · 320 · sáng", { width: 320 }).screen, "S1 · Bản đồ");
+});
