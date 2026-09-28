@@ -196,6 +196,10 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
         img = crop(img, { x: 0, y: 0, w: img.width, h });
         note = `, top ${Math.round(h / scale)}px of ${Math.round(model.root.abs?.h ?? 0)}px; inspect a section with image: true for the rest`;
       }
+      // At the design's own size (renders are 2x): the image is for the overall look, and every
+      // extra pixel is tokens resent on each later turn.
+      const designW = Math.round(model.root.abs?.w ?? img.width);
+      if (img.width > designW) img = resize(img, designW);
       if (Math.max(img.width, img.height) > MAX_EDGE) img = resize(img, Math.round((img.width * MAX_EDGE) / Math.max(img.width, img.height)));
       shown.add(key);
       return {
@@ -229,7 +233,7 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
     const cut = (model.root.name ?? "").lastIndexOf("/");
     if (cached && cut > 0) {
       const prefix = model.root.name.slice(0, cut + 1);
-      const family = cached.analysis.components.filter((c) => c.name.startsWith(prefix) && c.id !== id);
+      const family = cached.analysis.components.filter((c) => (c.name ?? "").startsWith(prefix) && c.id !== id);
       if (family.length) lines.push(`- Family ${prefix}*: ${family.map((c) => `${c.name} (${c.id}, ${c.instances} instances)`).join(", ")} — in code, often one component with a variant prop`);
     }
     const code = map.component(id);
@@ -279,9 +283,14 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
         resolved = await resolveTarget(target, wanted);
       } catch (err) {
         if (!err.candidates || format !== "outline") throw err;
-        const base = pickBase(err.candidates);
+        // Only frames of the screen named: its own rows, and screens named "<it> · …" / "<it> — …"
+        // (states the names add). A partial match ("Map" in "Sitemap") stays ambiguous.
+        const same = (c) => c.row?.screen === wanted || c.row?.code === wanted || c.row?.screen?.startsWith(`${wanted} · `) || c.row?.screen?.startsWith(`${wanted} — `);
+        const own = err.candidates.filter(same);
+        if (own.length < 2 || !err.candidates.some((c) => c.row?.screen === wanted || c.row?.code === wanted)) throw err;
+        const base = pickBase(own);
         resolved = { id: base.id, frame: base, analysis: err.analysis };
-        variantsOf = err.candidates.filter((c) => c.id !== base.id);
+        variantsOf = own.filter((c) => c.id !== base.id);
       }
       const { id, frame, analysis } = resolved;
       const run = reader(target);

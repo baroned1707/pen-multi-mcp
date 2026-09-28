@@ -2,6 +2,7 @@
 // The faithful page is the design's own HTML export; drifted pages re-create what agents did in
 // practice (old UI kept, shell never ported, sections reordered, wrong color and type).
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +31,7 @@ const kinds = (rep, severity) => rep.findings.filter((f) => f.severity === sever
 
 before(async () => {
   client = await connect({ home: path.join(dir, "home"), cwd: dir, env: { PEN_MULTI_PREWARM: "0" } });
+  execFileSync("git", ["init", "-q"], { cwd: dir }); // a project: markers are searched in its repository
   await exec(`SetVariables({ bg: { type: "color", value: "#FFFFFF" }, ink: { type: "color", value: "#111111" }, brand: { type: "color", value: "#2563EB" } })`);
   await exec(`btn = Insert(document, { type: "frame", name: "C/Button", reusable: true, x: 0, y: -400, width: 358, height: 48, layout: "horizontal", justifyContent: "center", alignItems: "center", fill: "$brand", cornerRadius: 10 });
   Insert(btn, { type: "text", name: "Label", content: "Pay now", fill: "#FFFFFF", fontFamily: "Inter", fontSize: 16, fontWeight: "600" });

@@ -193,7 +193,8 @@ export const sameValue = (t, design, code) => {
     const a = parseColor(design), b = parseColor(code);
     return a && b ? deltaE(a, b) < 1 : String(design).toLowerCase() === String(code).toLowerCase();
   }
-  if (t.type === "number") return Math.abs(Number(design) - parseFloat(code)) < 0.01;
+  // 1rem is not 1: a unit other than px means a different value.
+  if (t.type === "number") return !/[a-z%]\s*$/i.test(String(code).replace(/px\s*$/i, "")) && Math.abs(Number(design) - parseFloat(code)) < 0.01;
   return String(design).replace(/^["']|["']$/g, "") === String(code).replace(/^["']|["']$/g, "");
 };
 

@@ -56,14 +56,18 @@ export function sheetRow({ designImg, uiImg, frame, findings, uiWidth = frame.w 
  * Close-ups of the worst findings with a box: the design crop and the UI crop side by side, each
  * with some margin, for up to `n` findings (high first). Returns [{ finding, image }].
  */
-export function findingCrops({ designImg, uiImg, frame, findings, uiWidth = frame.w, n = 3, margin = 24, maxWidth = 900 }) {
+export function findingCrops({ designImg, uiImg, frame, findings, uiWidth = frame.w, n = 3, margin = 24, maxWidth = 600 }) {
   const k = designImg.width / frame.w;
   const ui = resize(uiImg, Math.round(uiWidth * k));
   const rank = { high: 0, medium: 1, low: 2 };
-  const worst = findings.filter((f) => f.box && f.severity !== "low").sort((a, b) => rank[a.severity] - rank[b.severity] || a.n - b.n).slice(0, n);
+  // Only what both images show: a capture stops at its viewport height, the design may go on.
+  const shown = (f) => f.box.y * k < Math.min(designImg.height, ui.height);
+  const worst = findings.filter((f) => f.box && f.severity !== "low" && shown(f)).sort((a, b) => rank[a.severity] - rank[b.severity] || a.n - b.n).slice(0, n);
   return worst.map((f) => {
     const b = { x: (f.box.x - margin) * k, y: (f.box.y - margin) * k, w: (f.box.w + 2 * margin) * k, h: (f.box.h + 2 * margin) * k };
-    const pair = hstack([crop(designImg, b), crop(ui, b)]);
+    // Back to design units (renders are 2x): close-ups are for a glance, not for measuring.
+    let pair = hstack([crop(designImg, b), crop(ui, b)]);
+    if (k > 1) pair = resize(pair, Math.max(1, Math.round(pair.width / k)));
     return { finding: f, image: pair.width > maxWidth ? resize(pair, maxWidth) : pair };
   });
 }

@@ -6,11 +6,27 @@ import { tokenOrHex } from "../import/build.js";
 
 const r2 = (v) => Math.round(v * 100) / 100;
 
-/** Number variables with exactly one token per value: Map(value -> "$name"); shared values are left out. */
-export function numberTokens(variables = {}) {
+/** An execute snippet printing `USAGE {"fontSize":[names],"cornerRadius":[names]}`: the number tokens the document uses per property. */
+export const USAGE_SNIPPET = `const U = { fontSize: {}, cornerRadius: {} };
+Get((n) => { for (const k of ["fontSize", "cornerRadius"]) for (const v of [].concat(n[k] ?? [])) if (typeof v === "string" && v.startsWith("$")) U[k][v.slice(1)] = 1; return undefined; });
+Print("USAGE", JSON.stringify({ fontSize: Object.keys(U.fontSize), cornerRadius: Object.keys(U.cornerRadius) }));`;
+
+/** { fontSize, radius } number-token maps from the printed usage (see USAGE_SNIPPET). */
+export function propertyNumbers(variables, usageText) {
+  const u = JSON.parse(/USAGE (.*)/.exec(usageText ?? "")?.[1] ?? "{}");
+  return { fontSize: numberTokens(variables, u.fontSize ?? []), radius: numberTokens(variables, u.cornerRadius ?? []) };
+}
+
+/**
+ * Number variables usable for one property: only those the document already uses for it
+ * (`names`; a spacing token of 16 is not a font size), and only values exactly one of them has.
+ * Map(value -> "$name").
+ */
+export function numberTokens(variables = {}, names = []) {
+  const allowed = new Set(names);
   const byValue = new Map();
   for (const [name, v] of Object.entries(variables)) {
-    if (v?.type !== "number" || Array.isArray(v.value) || typeof v.value !== "number") continue;
+    if (!allowed.has(name) || v?.type !== "number" || Array.isArray(v.value) || typeof v.value !== "number") continue;
     byValue.set(v.value, byValue.has(v.value) ? null : `$${name}`);
   }
   return new Map([...byValue].filter(([, t]) => t));
@@ -37,11 +53,11 @@ function containerAt(model, box) {
  * ([{ n, why }]). `theme` is the frame's theme (color tokens resolve in it); `elements` are the
  * UI elements in design coordinates (for texts only the code has).
  */
-export function designEdits(findings, { model, theme, elements = [] }) {
+export function designEdits(findings, { model, theme, elements = [], numbers = {} }) {
   const colors = colorTokens(model.variables, theme);
-  const numbers = numberTokens(model.variables);
   const color = (hex) => tokenOrHex(hex, colors);
-  const num = (v) => numbers.get(v) ?? v;
+  const size = (v) => numbers.fontSize?.get(v) ?? v;
+  const radius = (v) => numbers.radius?.get(v) ?? v;
   const els = new Map(elements.map((e) => [e.i, e]));
   const edits = [], skipped = [];
   const update = (f, props, why) => edits.push({ n: f.n, op: `Update(${JSON.stringify(f.designId)}, ${JSON.stringify(props)})`, why });
@@ -64,7 +80,7 @@ export function designEdits(findings, { model, theme, elements = [] }) {
         else skipped.push({ n: f.n, why: "the code has no border; remove the stroke by hand if that is intended" });
         break;
       case "font-size":
-        update(f, { fontSize: num(f.ui) }, "the code's font size");
+        update(f, { fontSize: size(f.ui) }, "the code's font size");
         break;
       case "font-weight":
         update(f, { fontWeight: String(f.ui) }, "the code's font weight");
@@ -76,10 +92,12 @@ export function designEdits(findings, { model, theme, elements = [] }) {
         break;
       }
       case "radius":
-        update(f, { cornerRadius: num(f.ui) }, "the code's corner radius");
+        update(f, { cornerRadius: radius(f.ui) }, "the code's corner radius");
         break;
       case "missing":
-        update(f, { enabled: false }, "the code no longer shows it — hidden, not deleted; delete it yourself if it is gone for good");
+        // Hiding a container would hide the contents the code still shows.
+        if (f.present?.length) skipped.push({ n: f.n, why: `${f.present.length} of its contents are still in the code; only the container differs — restructure by hand` });
+        else update(f, { enabled: false }, "the code no longer shows it — hidden, not deleted; delete it yourself if it is gone for good");
         break;
       case "extra": {
         const el = els.get(f.uiIndex);
@@ -91,7 +109,7 @@ export function designEdits(findings, { model, theme, elements = [] }) {
         const props = { type: "text", name: String(el.text).trim().slice(0, 32), content: String(el.text).trim() };
         const fg = color(el.fg);
         if (fg) props.fill = fg;
-        if (el.fontSize) props.fontSize = num(r2(el.fontSize));
+        if (el.fontSize) props.fontSize = size(r2(el.fontSize));
         if (el.fontWeight) props.fontWeight = String(el.fontWeight);
         if (el.fontFamily) props.fontFamily = el.fontFamily;
         edits.push({ n: f.n, op: `Insert(${JSON.stringify(parent.id)}, ${JSON.stringify(props)})`, why: `the code shows it inside ${parent.name ?? parent.id}; move it into place after inserting` });

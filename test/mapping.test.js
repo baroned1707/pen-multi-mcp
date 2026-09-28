@@ -77,3 +77,18 @@ test("tokens: by name, then by a unique value; ambiguous values stay unmapped; o
   assert.equal(m.get("$s4"), "--space-1");
   assert.deepEqual(m.ambiguous, [{ token: "$hairline", candidates: ["--line-a", "--line-b"] }]);
 });
+
+test("tokens: a code value in rem or % is not the same as the design's number", () => {
+  const m = tokenMap({ "stroke-thin": { type: "number", value: 1 }, gap: { type: "number", value: 8 } }, {}, `:root { --space-4: 1rem; --half: 1%; --gap-sm: 8px; }`, "t.css");
+  assert.equal(m.get("$stroke-thin"), undefined);
+  assert.equal(m.get("$gap"), "--gap-sm");
+});
+
+test("locate: a marker in several files resolves to the file preferred for this screen", () => {
+  write("web/Settings.tsx", `export function Settings() {\n  return <h1 data-pen="Home/Header/Title">Settings</h1>;\n}\n`);
+  const idx = scanMarkers(dir);
+  const node = { id: "t9", address: "Home/Header/Title", name: "Title" };
+  assert.equal(locate(node, idx).also, 1, "the other place is counted");
+  assert.equal(locate(node, idx, { prefer: new Map([["web/Settings.tsx", 5]]) }).file, "web/Settings.tsx");
+  assert.equal(locate(node, idx, { prefer: new Map([["web/Home.tsx", 5]]) }).file, "web/Home.tsx");
+});

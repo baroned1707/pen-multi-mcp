@@ -128,7 +128,8 @@ test("import_ui: sizes on the one token with that value, and marked elements as 
     filePath: file,
     input: `SetVariables({ r12: { type: "number", value: 12 }, "text-lg": { type: "number", value: 18 }, s18: { type: "number", value: 18 } });
 pill = Insert(document, { type: "frame", name: "C/Pill", reusable: true, x: 0, y: -900, width: 80, height: 28, layout: "horizontal", justifyContent: "center", alignItems: "center", fill: "#2563EB", cornerRadius: 14 });
-Insert(pill, { type: "text", name: "Label", content: "New", fill: "#FFFFFF", fontFamily: "Arial", fontSize: 13 });`,
+Insert(pill, { type: "text", name: "Label", content: "New", fill: "#FFFFFF", fontFamily: "Arial", fontSize: 13 });
+Insert(document, { type: "frame", name: "Uses r12", x: 0, y: -1000, width: 40, height: 40, cornerRadius: "$r12" });`,
   });
   fs.writeFileSync(
     path.join(dir, "tokens.html"),

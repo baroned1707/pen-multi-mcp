@@ -24,9 +24,16 @@ function nodeRef(model, d, id) {
 export function pointFindingsAtCode(findings, { model, d, snapshot, mapping }) {
   let located = 0, unlocated = 0, reason = null;
   const els = new Map((snapshot.elements ?? []).map((e, i) => [e.i ?? i, e]));
+  // Files holding this screen's markers, by how many of its nodes they mark: a marker found in
+  // several files ("Header/Title" on every screen) resolves to this screen's file.
+  const prefer = new Map();
+  for (const id of (d.nodes ?? []).map((n) => n.id)) {
+    const loc = model.nodes.has(id) ? mapping.locate(nodeRef(model, d, id)) : null;
+    if (loc?.file && !loc.also) prefer.set(loc.file, (prefer.get(loc.file) ?? 0) + 1);
+  }
   for (const f of findings) {
     let loc = null;
-    if (f.designId && model.nodes.has(f.designId)) loc = mapping.locate(nodeRef(model, d, f.designId));
+    if (f.designId && model.nodes.has(f.designId)) loc = mapping.locate(nodeRef(model, d, f.designId), { prefer });
     else if (f.uiIndex !== undefined) {
       const v = markerValue(els.get(f.uiIndex)?.marker);
       const hit = v && mapping.index.markers.get(v)?.[0];

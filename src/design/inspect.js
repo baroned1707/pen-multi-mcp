@@ -122,6 +122,7 @@ export function describe(model, n, o) {
     parts.push(`"${clip(n.resolved?.content ?? n.content)}" ${font}`.trimEnd());
     const color = n.fill !== undefined ? paint(model, n.fill, n.resolved?.fill, o) : null;
     if (color && !(o?.defaults?.color && color === o.defaults.color)) parts.push(`color ${color}`);
+    else if (!color && o?.defaults?.color) parts.push("color none"); // not the default stated above
     if (n.textGrowth) parts.push(`grow ${n.textGrowth}`);
   }
   if (n.type === "icon") parts.push(`icon ${n.library ?? ""}:${n.icon ?? ""} color ${paint(model, n.fill, n.resolved?.fill, o) ?? "none"}`);

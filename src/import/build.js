@@ -34,13 +34,13 @@ function alignOf(el) {
 }
 
 // A number as the one token with that value, else the number.
-const numOrToken = (v, numbers) => numbers?.get(r2(v)) ?? r2(v);
+const numOrToken = (v, map) => map?.get(r2(v)) ?? r2(v);
 
 const textStyle = (el, tokens, numbers) => {
   const out = {};
   const fg = tokenOrHex(el.fg, tokens);
   if (fg) out.fill = fg;
-  if (el.fontSize) out.fontSize = numOrToken(el.fontSize, numbers);
+  if (el.fontSize) out.fontSize = numOrToken(el.fontSize, numbers?.fontSize);
   if (el.fontWeight) out.fontWeight = String(el.fontWeight);
   if (el.fontFamily) out.fontFamily = el.fontFamily;
   if (el.lineHeight && el.fontSize) out.lineHeight = r2(el.lineHeight / el.fontSize);
@@ -67,7 +67,7 @@ function textPlacement(el, origin) {
   const y = r2(tb.y - origin.y); // the first line box's top
   // One line in the code must stay one line in the design, whose font metrics differ slightly:
   // it grows with its content from where the line starts, instead of wrapping at a fixed width.
-  if (el.fontSize && tb.h < el.fontSize * 1.9) return { x: r2(tb.x - origin.x), y, textGrowth: "auto", textAlign: align };
+  if (el.fontSize && tb.h < (el.lineHeight ?? el.fontSize * 1.2) * 1.5) return { x: r2(tb.x - origin.x), y, textGrowth: "auto", textAlign: align };
   if (align === "left") return { x: r2(tb.x - origin.x), y, width: r2(Math.max(tb.w + 1, cb.x + cb.w - tb.x)), textAlign: align };
   if (align === "right") return { x: r2(cb.x - origin.x), y, width: r2(Math.max(tb.w + 1, tb.x + tb.w - cb.x)), textAlign: align };
   return { x: r2(cb.x - origin.x), y, width: r2(Math.max(tb.w + 1, cb.w)), textAlign: align };
@@ -181,7 +181,7 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
       const url = images(el);
       if (url) props.fill = { type: "image", url, mode: "fill" };
     }
-    if (el.radius) props.cornerRadius = numOrToken(Math.min(el.radius, w / 2, h / 2), numbers);
+    if (el.radius) props.cornerRadius = numOrToken(Math.min(el.radius, w / 2, h / 2), numbers?.radius);
     if (border) {
       props.stroke = border;
       props.strokeWidth = r2(el.borderWidth);

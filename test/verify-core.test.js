@@ -460,8 +460,10 @@ test("the verdict says what was not checked, so a MATCH is not read as covering 
 
 test("code-to-design: number tokens only when one token has the value; a design edited since the last verify is flagged", async () => {
   const { numberTokens, editLines } = await import("../src/verify/reverse.js");
-  const t = numberTokens({ s16: { type: "number", value: 16 }, r16: { type: "number", value: 16 }, fs24: { type: "number", value: 24 }, ink: { type: "color", value: "#000" } });
-  assert.deepEqual([...t], [[24, "$fs24"]]);
+  const vars = { s16: { type: "number", value: 16 }, r16: { type: "number", value: 16 }, fs24: { type: "number", value: 24 }, fs16: { type: "number", value: 16 }, ink: { type: "color", value: "#000" } };
+  assert.deepEqual([...numberTokens(vars, ["fs24", "fs16"])], [[24, "$fs24"], [16, "$fs16"]], "only tokens the document uses for this property");
+  assert.deepEqual([...numberTokens(vars, ["s16", "r16"])], [], "a value two candidates share stays a number");
+  assert.deepEqual([...numberTokens(vars, [])], [], "a property the document never puts on tokens gets none");
   const lines = editLines({ edits: [{ n: 1, op: 'Update("a", {"fill":"$ink"})', why: "x" }], skipped: [] }, { designChanged: true });
   assert.match(lines.join("\n"), /⚠ The design was also edited since this frame's last verify/);
   assert.match(lines.join("\n"), /1\. Update\("a", \{"fill":"\$ink"\}\) {2}\/\/ x/);

@@ -1,6 +1,7 @@
 // overview and inspect against the real engine, on a document built here with the cases that
 // tripped agents in real projects.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -254,6 +255,7 @@ test("inspect maps components and tokens to the project's code", async () => {
   fs.writeFileSync(path.join(dir, "web", "Button.tsx"), `export function Button({ children }) {\n  return <button data-pen="C/Button">{children}</button>;\n}\n`);
   fs.writeFileSync(path.join(dir, "web", "tokens.css"), `:root { --text-strong: #111111; }\n.dark { --text-strong: #EEEEEE; }\n`);
   fs.writeFileSync(path.join(dir, ".pen-multi.json"), JSON.stringify({ tokens: { file: "web/tokens.css" } }));
+  execFileSync("git", ["init", "-q"], { cwd: dir }); // markers are searched in the project's repository
   try {
     const t = text(await call(client, "inspect", { filePath: file, target: "Checkout · light" }));
     assert.match(t, /Components: 1 of \d+ used here map to code: C\/Button → Button \(web\/Button\.tsx:2\)/);
@@ -285,4 +287,10 @@ test("inspect on a component gives its API: slots, overrides used by instances, 
   assert.match(t, /- Family C\/\*: .*C\/Dot \(\w+, \d+ instances\)/);
   assert.match(t, /- Code: not mapped — mark the code definition with data-pen="\w+"/);
   assert.match(t, /## Outline/, "the outline stays, for whoever builds the component");
+});
+
+test("a partial name match is still ambiguous, not variants of another screen", async () => {
+  const res = await call(client, "inspect", { filePath: file, target: "ome", image: false });
+  assert.equal(res.isError, true, text(res));
+  assert.match(text(res), /matches \d+ frames/);
 });

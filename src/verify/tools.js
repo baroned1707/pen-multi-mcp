@@ -12,7 +12,7 @@ import { pngBuffer, readPng, resize, writePng } from "./image.js";
 import { verifyScreen } from "./pipeline.js";
 import { contactSheet, findingCrops, renderReport, sheetRow } from "./report.js";
 import { pointFindingsAtCode } from "./code.js";
-import { designEdits, editLines } from "./reverse.js";
+import { USAGE_SNIPPET, designEdits, editLines, propertyNumbers } from "./reverse.js";
 import { projectMapping } from "../mapping/index.js";
 
 const OUT_DIR = "design-verify";
@@ -270,7 +270,8 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       // Point findings at the code (markers) and name the design tokens they concern.
       const mapping = projectMapping({ penFile: target.file, conv: conventions(target.file), variables: model.variables, themes: model.themes });
       const where = pointFindingsAtCode(result.findings, { model, d, snapshot, mapping });
-      if (where.unlocated) result.hints = [...(result.hints ?? []), `${where.unlocated} finding(s) have no code location (${where.reason}). Mark elements with data-pen="<node id or address>" (web) or testID/Key/accessibility id "pen:<…>" to get file:line.`];
+      result.hints = [...(result.hints ?? []), ...mapping.notes];
+      if (where.unlocated && !mapping.index.notGit && !mapping.index.truncated) result.hints.push(`${where.unlocated} finding(s) have no code location (${where.reason}). Mark elements with data-pen="<node id or address>" (web) or testID/Key/accessibility id "pen:<…>" to get file:line.`);
 
       const sheetPath = uiImg ? `${outBase}.png` : null;
       if (uiImg) writePng(sheetPath, contactSheet([sheetRow({ designImg, uiImg, frame: d.frame, findings: result.findings, uiWidth: snapshot.viewport?.w })]));
@@ -311,7 +312,8 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       if (direction === "code-to-design") {
         const s = result.scale ?? 1;
         const elements = (snapshot.elements ?? []).map((e) => ({ ...e, box: e.box && { x: e.box.x * s, y: e.box.y * s, w: e.box.w * s, h: e.box.h * s } }));
-        const edits = designEdits(result.findings, { model, theme: frameTheme ?? rootTheme ?? null, elements });
+        const usage = await run(USAGE_SNIPPET);
+        const edits = designEdits(result.findings, { model, theme: frameTheme ?? rootTheme ?? null, elements, numbers: propertyNumbers(model.variables, usage.text) });
         reportLines = [...reportLines.filter((l) => !l.startsWith("Fix the high findings first")), ...editLines(edits, { designChanged: Boolean(previousHash && penHash && previousHash !== penHash) })];
       }
       const res = design.wrap(target, reportLines);

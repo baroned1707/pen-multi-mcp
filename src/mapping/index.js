@@ -6,6 +6,7 @@
 // .pen-multi.json may override both; nothing here guesses a framework.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { baseTheme, kebab, normalizeTokens, readCodeTokens, sameValue } from "../lint/tokens.js";
 
@@ -17,20 +18,19 @@ const DECLARATION = /\b(?:function|class|struct|interface|object|enum|fun|func|d
 
 const cache = new Map(); // root -> Map(rel -> { mtimeMs, size, hits, dyn })
 
+/**
+ * Source files under `root` as git sees them (tracked and untracked, .gitignore respected), or
+ * null when `root` is not inside a git repository — then nothing is searched: walking an
+ * arbitrary folder (a home directory) is slow and reads what the project never meant to share.
+ * Listed on every call, so a file the agent just created is seen; file contents are cached.
+ */
 function listFiles(root) {
+  if (root === "/" || root === os.homedir()) return null;
   let rels;
   try {
-    rels = execFileSync("git", ["ls-files", "-co", "--exclude-standard", "-z"], { cwd: root, encoding: "utf8", maxBuffer: 256 << 20, stdio: ["ignore", "pipe", "ignore"] }).split("\0").filter(Boolean);
+    rels = execFileSync("git", ["ls-files", "-co", "--exclude-standard", "-z"], { cwd: root, encoding: "utf8", maxBuffer: 256 << 20, stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }).split("\0").filter(Boolean);
   } catch {
-    rels = [];
-    const walk = (d) => {
-      for (const e of fs.readdirSync(path.join(root, d), { withFileTypes: true })) {
-        if (e.isDirectory()) {
-          if (!SKIP_DIRS.has(e.name) && !e.name.startsWith(".")) walk(path.join(d, e.name));
-        } else rels.push(path.join(d, e.name));
-      }
-    };
-    walk("");
+    return null; // not a git work tree (or git is missing)
   }
   return rels.filter((r) => SOURCE.test(r) && !r.split(/[\\/]/).some((seg) => SKIP_DIRS.has(seg)));
 }
@@ -56,7 +56,9 @@ export function scanMarkers(root, { timeoutMs = 3000, maxBytes = 1_000_000 } = {
   const known = cache.get(root) ?? new Map();
   const next = new Map();
   let truncated = false;
-  for (const rel of listFiles(root)) {
+  const files = listFiles(root);
+  if (!files) return { markers: new Map(), dynamic: [], files: 0, truncated: false, notGit: true };
+  for (const rel of files) {
     let st;
     try {
       st = fs.statSync(path.join(root, rel));
@@ -73,7 +75,12 @@ export function scanMarkers(root, { timeoutMs = 3000, maxBytes = 1_000_000 } = {
       truncated = true;
       continue;
     }
-    next.set(rel, { mtimeMs: st.mtimeMs, size: st.size, ...scanFile(fs.readFileSync(path.join(root, rel), "utf8")) });
+    if (!st.isFile()) continue;
+    try {
+      next.set(rel, { mtimeMs: st.mtimeMs, size: st.size, ...scanFile(fs.readFileSync(path.join(root, rel), "utf8")) });
+    } catch {
+      // removed or unreadable since it was listed
+    }
   }
   cache.set(root, next);
   const markers = new Map(), dynamic = [];
@@ -94,11 +101,16 @@ const stripIndex = (s) => String(s ?? "").replace(/\[\d+\]/g, "");
  * or { reason } when no static marker names it. `node` needs id, address, name and, for a node
  * inside an instance, instanceOf { id, name } (the component, located by its own marker).
  */
-export function locate(node, idx) {
-  // The first location, and how many other places carry the same marker.
+export function locate(node, idx, { prefer } = {}) {
+  // One location for a marker: in the file that holds most of this screen's markers when there
+  // is a choice (`prefer`: Map(file -> count)), and how many other places carry it.
+  const pick = (locs) => {
+    const best = prefer ? [...locs].sort((a, b) => (prefer.get(b.file) ?? 0) - (prefer.get(a.file) ?? 0))[0] : locs[0];
+    return { ...best, ...(locs.length > 1 ? { also: locs.length - 1 } : {}) };
+  };
   const first = (v) => {
     const locs = idx.markers.get(v);
-    return locs?.length ? { ...locs[0], ...(locs.length > 1 ? { also: locs.length - 1 } : {}) } : undefined;
+    return locs?.length ? pick(locs) : undefined;
   };
   const byId = first(node.id);
   if (byId) return { ...byId, how: "id" };
@@ -107,7 +119,7 @@ export function locate(node, idx) {
   let best = null;
   for (const [v, locs] of idx.markers) {
     const w = stripIndex(v);
-    if ((addr === w || addr.endsWith(`/${w}`)) && (!best || w.length > best.w.length)) best = { w, loc: { ...locs[0], ...(locs.length > 1 ? { also: locs.length - 1 } : {}) } };
+    if ((addr === w || addr.endsWith(`/${w}`)) && (!best || w.length > best.w.length)) best = { w, loc: pick(locs) };
   }
   if (best) return { ...best.loc, how: "address" };
   const byName = node.name && first(node.name);
@@ -203,9 +215,16 @@ const tokenCache = new Map(); // token file -> { mtimeMs, key, map }
  * notes }. Cheap to call per request: markers and the token file are re-read only when changed.
  */
 export function projectMapping({ penFile, conv, variables = {}, themes = {}, components = [], root = process.cwd() }) {
-  const idx = scanMarkers(root);
+  let idx;
   const notes = [];
-  if (idx.truncated) notes.push("The marker search stopped at its time limit; some code locations may be missing.");
+  try {
+    idx = scanMarkers(root);
+  } catch (err) {
+    idx = { markers: new Map(), dynamic: [], files: 0, truncated: false };
+    notes.push(`The marker search failed (${err.message}); code locations are not shown.`);
+  }
+  if (idx.truncated) notes.push("The marker search stopped at its time limit; some code locations may be missing — call again (files already read are cached).");
+  if (idx.notGit) notes.push(`${root} is not inside a git repository, so code markers are not searched there (start the agent in the project's repository).`);
   let tokens = new Map();
   tokens.ambiguous = [];
   const tf = conv.tokens?.file && path.resolve(path.dirname(penFile), conv.tokens.file);
@@ -213,7 +232,7 @@ export function projectMapping({ penFile, conv, variables = {}, themes = {}, com
     if (!fs.existsSync(tf)) notes.push(`.pen-multi.json tokens.file ${conv.tokens.file} does not exist.`);
     else {
       const st = fs.statSync(tf);
-      const key = JSON.stringify([Object.keys(variables).sort(), conv.tokens.map ?? {}]);
+      const key = JSON.stringify([variables, themes, conv.tokens.map ?? {}]);
       const hit = tokenCache.get(tf);
       if (hit && hit.mtimeMs === st.mtimeMs && hit.key === key) tokens = hit.map;
       else {
@@ -232,6 +251,6 @@ export function projectMapping({ penFile, conv, variables = {}, themes = {}, com
     notes,
     codeName: (token) => tokens.get(token),
     component: (id) => comps.get(id),
-    locate: (node) => locate(node, idx),
+    locate: (node, opts) => locate(node, idx, opts),
   };
 }

@@ -7,7 +7,7 @@ import { buildModel } from "../design/model.js";
 import { ReadError, readSubtree } from "../design/read.js";
 import { colorTokens } from "../lint/rules.js";
 import { readPng } from "../verify/image.js";
-import { numberTokens } from "../verify/reverse.js";
+import { USAGE_SNIPPET, propertyNumbers } from "../verify/reverse.js";
 import { slug } from "../verify/tools.js";
 import { buildSpecs, imageCropper, safeName, snippets, tokenOrHex } from "./build.js";
 
@@ -133,7 +133,8 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
       const cropper = images && shot ? imageCropper({ img: shot, scale, penFile: target.file, prefix }) : null;
       const vw = snapshot.viewport?.w ?? width;
       const vh = shot ? shot.height / scale : snapshot.viewport?.h ?? height;
-      const numbers = numberTokens(ctx.variables);
+      const usage = await design.reader(target)(USAGE_SNIPPET);
+      const numbers = propertyNumbers(ctx.variables, usage.text);
       const components = await markedComponents(target, snapshot);
       const specs = buildSpecs(snapshot, { tokens, numbers, components, images: cropper, frameHeight: vh });
       const frameName = safeName(name ?? `${snapshot.url ? new URL(snapshot.url).pathname.replace(/^\/+/, "") || "home" : snapshot.platform ?? "screen"} (from code)`);

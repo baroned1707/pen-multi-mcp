@@ -60,7 +60,7 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
     const contents =
       (lost.length ? ` Its ${lost.length} compared descendants are missing too${texts.length ? `, including the texts ${texts.slice(0, 6).join(", ")}${texts.length > 6 ? ", …" : ""}` : ""}.` : "") +
       (present.length ? ` ${present.length} of its contents are present (${present.slice(0, 3).map((n) => n.name).join(", ")}${present.length > 3 ? ", …" : ""}): the container itself is what differs.` : "");
-    add({ severity: sev, group: "Structure", kind: "missing", designId: node.id, address: node.address, box: node.box, contains: lost.map((n) => n.id), message: `missing: ${what} — ${label(node)} at ${box(node.box)} has no counterpart in the UI${node.kind === "text" ? " (no element shows this text)" : ""}.${contents}` });
+    add({ severity: sev, group: "Structure", kind: "missing", designId: node.id, address: node.address, box: node.box, contains: lost.map((n) => n.id), present: present.length ? present.map((n) => n.id) : undefined, message: `missing: ${what} — ${label(node)} at ${box(node.box)} has no counterpart in the UI${node.kind === "text" ? " (no element shows this text)" : ""}.${contents}` });
   }
   const designTexts = new Set(design.nodes.filter((n) => n.kind === "text").map((n) => normText(n.text)));
   const extras = matched.unmatchedUi.filter((el) => normText(el.text) && !designTexts.has(normText(el.text))).sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x);
