@@ -72,8 +72,11 @@ export function resize(img, width, height = Math.max(1, Math.round((img.height *
 }
 
 export function crop(img, { x, y, w, h }) {
-  x = Math.max(0, Math.round(x));
-  y = Math.max(0, Math.round(y));
+  // A box partly above or left of the image loses the part outside, not its far edge.
+  if (x < 0) (w += x), (x = 0);
+  if (y < 0) (h += y), (y = 0);
+  x = Math.round(x);
+  y = Math.round(y);
   w = Math.max(0, Math.min(img.width - x, Math.round(w)));
   h = Math.max(0, Math.min(img.height - y, Math.round(h)));
   const out = new Uint8Array(w * h * 4);

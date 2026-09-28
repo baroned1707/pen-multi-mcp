@@ -39,19 +39,17 @@ function isSnapshotFile(file) {
 const describeSource = (src) =>
   src.kind === "web" ? `web ${src.url}` : src.kind === "image" ? `image ${src.path}` : `${src.kind} ${src.platform}${src.device ? ` ${src.device}` : ""}${src.deepLink ? ` ${src.deepLink}` : ""}`;
 
-export function registerVerifyTools({ tool, z, route, design, withMachineLock, optionalFilePath, ok, conventions }) {
+export function registerVerifyTools({ tool, z, route, design, withMachineLock, optionalFilePath, ok, conventions, saver }) {
   // The page a screen is served at: .pen-multi.json { baseUrl, routes: { "<screen name, code or frame name>": "/path" } }.
-  const target0 = (f) => route(f);
-  async function routeUrl(targetPromise, wanted) {
-    const target = await targetPromise;
+  function routeUrl(target, wanted, frame) {
     const conv = conventions(target.file);
-    const { frame } = await design.resolveTarget(target, wanted, { refreshed: true }).catch(() => ({}));
-    const keys = [wanted, frame?.name, frame?.row?.screen, frame?.row?.code].filter(Boolean);
+    const keys = [...new Set([frame?.name, wanted, frame?.row?.screen, frame?.row?.code].filter(Boolean))];
     const hit = keys.map((k) => conv.routes?.[k]).find(Boolean);
     if (!hit) throw new ReadError(`source.url is missing and .pen-multi.json has no route for ${keys.map((k) => `"${k}"`).join(" / ")}; pass url, or add { "baseUrl": "http://localhost:5173", "routes": { "${frame?.row?.screen ?? wanted}": "/path" } } next to the .pen.`);
-    if (/^https?:/i.test(hit)) return hit;
+    if (/^[a-z]+:/i.test(hit)) return hit;
     if (!conv.baseUrl) throw new ReadError(`.pen-multi.json routes "${hit}" but has no baseUrl.`);
-    return new URL(hit, conv.baseUrl).toString();
+    // Joined as paths, so a baseUrl with a path ("http://host/app") keeps it for "/orders".
+    return `${conv.baseUrl.replace(/\/+$/, "")}/${hit.replace(/^\/+/, "")}`;
   }
   const source = z
     .object({
@@ -182,10 +180,11 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
     },
     async ({ filePath: f, target: wanted, width, theme, source: src, snapshot: snapPath, tolerance, maxLines = 120 }) => {
       if (!src && !snapPath) throw new ReadError("Pass source (to capture now) or snapshot (a capture file).");
-      if (src?.kind === "web" && !src.url) src = { ...src, url: await routeUrl(target0(f), wanted) };
+
       const target = await route(f);
       const run = design.reader(target);
-      const { id, theme: frameTheme } = await pickFrame(target, wanted, { width, theme });
+      const { id, frame: picked, theme: frameTheme } = await pickFrame(target, wanted, { width, theme });
+      if (src?.kind === "web" && !src.url) src = { ...src, url: routeUrl(target, wanted, picked) };
       const model = buildModel(await readSubtree(run, id));
       const rootTheme = model.root.theme && typeof model.root.theme === "object" ? Object.values(model.root.theme)[0] : undefined;
       const d = designNodes(model);
@@ -221,6 +220,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         theme: frameTheme,
         width: d.frame.w,
       };
+      await saver?.flush(target.file).catch(() => {}); // hash the design as saved, not mid-save
       const penHash = target.mode === "app" || !fs.existsSync(target.file) ? null : createHash("sha1").update(fs.readFileSync(target.file)).digest("hex");
       fs.writeFileSync(
         files.report,

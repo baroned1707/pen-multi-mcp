@@ -140,11 +140,40 @@ function collect(limit) {
     });
   const owned = new Set(); // elements whose text belongs to an ancestor's paragraph
 
-  const textRect = (el, dx, dy) => {
-    const range = el.ownerDocument.createRange();
-    range.selectNodeContents(el);
-    const t = range.getBoundingClientRect();
-    return t.width > 0 && t.height > 0 ? { x: t.left + dx, y: t.top + dy, w: t.width, h: t.height } : undefined;
+  // The element's content box (inside border and padding).
+  const contentRect = (el, r, cs, dx, dy) => {
+    const bl = parseFloat(cs.borderLeftWidth) || 0, bt = parseFloat(cs.borderTopWidth) || 0, br = parseFloat(cs.borderRightWidth) || 0, bb = parseFloat(cs.borderBottomWidth) || 0;
+    const pl = parseFloat(cs.paddingLeft) || 0, pt = parseFloat(cs.paddingTop) || 0, pr = parseFloat(cs.paddingRight) || 0, pb = parseFloat(cs.paddingBottom) || 0;
+    return { x: r.left + bl + pl + dx, y: r.top + bt + pt + dy, w: Math.max(0, r.width - bl - pl - br - pr), h: Math.max(0, r.height - bt - pt - bb - pb) };
+  };
+  // Where the text is drawn: horizontally the union of its text nodes' glyphs (not inline icons or
+  // images); vertically the first line box's top — the glyphs' top minus half the leading (glyph
+  // rects sit half a leading below the line box; flex/button centering moves both together).
+  const textRect = (el, content, merged, dx, dy, cs) => {
+    const nodes = [];
+    const walk = (n) => {
+      for (const c of n.childNodes) {
+        if (c.nodeType === Node.TEXT_NODE && c.textContent.trim()) nodes.push(c);
+        else if (merged && c.nodeType === Node.ELEMENT_NODE && !/^(svg|img|video|canvas|picture|iframe)$/i.test(c.tagName)) walk(c);
+      }
+    };
+    walk(el);
+    let x1 = Infinity, x2 = -Infinity, y1 = Infinity, y2 = -Infinity, firstH = 0;
+    for (const t of nodes) {
+      const range = el.ownerDocument.createRange();
+      range.selectNodeContents(t);
+      for (const q of range.getClientRects()) {
+        if (q.width <= 0) continue;
+        x1 = Math.min(x1, q.left);
+        x2 = Math.max(x2, q.right);
+        if (q.top < y1) (y1 = q.top), (firstH = q.height);
+        y2 = Math.max(y2, q.bottom);
+      }
+    }
+    if (!(x2 > x1)) return undefined;
+    const lh = parseFloat(cs.lineHeight);
+    const top = y1 - (Number.isFinite(lh) && lh > firstH ? (lh - firstH) / 2 : 0);
+    return { x: x1 + dx, y: top + dy, w: x2 - x1, h: Math.max(1, y2 - top) };
   };
   // Every CSS color (oklch, hsl, color-mix, display-p3...) as sRGB rgba(), as the browser paints it.
   const probe = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
@@ -174,6 +203,7 @@ function collect(limit) {
     const shown = !invisible && r.width > 0 && r.height > 0 && !tiny(r, cs) && !offPage(r, ox, oy) && !clipped(el, r, cs);
     if (shown) {
       let text = "";
+      let merged = false;
       if (el.tagName === "INPUT") text = TEXT_INPUT.test(el.type) ? el.value || el.placeholder || "" : "";
       else if (el.tagName === "TEXTAREA") text = el.value || el.placeholder || "";
       else if (el.tagName === "SELECT") text = el.selectedOptions?.[0]?.text ?? "";
@@ -184,6 +214,7 @@ function collect(limit) {
         if (el.children.length && !marked && phrasing(el) && (own.trim() || el.children.length > 1) && el.innerText?.trim()) {
           // innerText applies text-transform and turns <br> into a break; collapse to one line.
           text = el.innerText;
+          merged = true;
           for (const d of el.querySelectorAll("*")) owned.add(d);
         } else if (own.trim()) text = el.children.length === 0 && el.innerText ? el.innerText : own;
       }
@@ -216,8 +247,9 @@ function collect(limit) {
         truncated: truncated || undefined,
         fixed: cs.position === "fixed" || cs.position === "sticky" || undefined,
         box: { x: r.left + sx + ox, y: r.top + sy + oy, w: r.width, h: r.height },
+        contentBox: text ? contentRect(el, r, cs, sx + ox, sy + oy) : undefined,
         // Where the text itself is drawn inside the box (centered button labels, padded cards).
-        textBox: text && !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) ? textRect(el, sx + ox, sy + oy) : undefined,
+        textBox: text && !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) ? textRect(el, contentRect(el, r, cs, sx + ox, sy + oy), merged, sx + ox, sy + oy, cs) : undefined,
         frame: el.tagName === "IFRAME" ? (el.contentDocument ? "same-origin" : "cross-origin") : undefined,
         bg: rgb(cs.backgroundColor),
         // Text color, or the color an icon paints (SVG fill, icon-font glyph).

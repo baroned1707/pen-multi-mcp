@@ -131,8 +131,19 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
     const checkH = node.kind !== "text";
     const sizeTol = (v) => Math.max(tol.size, v * tol.sizeRatio);
     // Same left and right margins on a wider screen is a stretched (fill) element, not a size change.
-    const stretched = Math.abs(u.x - d.x) <= tol.position && Math.abs(vw - (u.x + u.w) - (fw - (d.x + d.w))) <= tol.position;
-    const wide = isText ? el.box : u; // a fixed-width text compares with its block's width
+    const blockBox = node.kind === "text" ? el.contentBox ?? el.box : u; // a text's width is its block's content width
+    const stretched = Math.abs(blockBox.x - d.x) <= tol.position && Math.abs(vw - (blockBox.x + blockBox.w) - (fw - (d.x + d.w))) <= tol.position;
+    // A fixed-width text's box runs from its line's anchor to the far edge of the block's content box.
+    const cb = el.contentBox ?? el.box, line = el.textBox;
+    const wide = !isText
+      ? u
+      : !line
+        ? cb
+        : node.align === "center"
+          ? cb
+          : node.align === "right"
+            ? { ...cb, w: line.x + line.w - cb.x }
+            : { ...cb, x: line.x, w: cb.x + cb.w - line.x };
     const dw = stretched ? 0 : wide.w - d.w, dh = u.h - d.h;
     const big = (dv, v) => Math.abs(dv) > Math.max(8, v * 0.2);
     const shownSize = isText ? `${r1(wide.w)} wide` : `${r1(u.w)}×${r1(u.h)}`, wantSize = isText ? `${r1(d.w)} wide` : `${r1(d.w)}×${r1(d.h)}`;

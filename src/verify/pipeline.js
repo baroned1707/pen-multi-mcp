@@ -47,9 +47,12 @@ export function verifyScreen({ design, snapshot, designImg, uiImg, tolerance }) 
       let uiScaled = null;
       for (const [id, p] of matched.pairs) {
         const n = design.nodes.find((x) => x.id === id);
-        if (flaggedIds.has(id) || p.how === "content" || n.kind === "section" || n.kind === "shell" || hasInside.has(id)) continue;
+        // Fixed bars (often shells with contents) move as a whole: compare them box to box too.
+        if (flaggedIds.has(id) || (!p.el.fixed && (p.how === "content" || n.kind === "section" || n.kind === "shell" || hasInside.has(id)))) continue;
         if (!wider && !p.el.fixed) continue;
-        ignore.push(n.box, p.el.box);
+        // Padded: a comparison cell straddling the edge would otherwise count half a bar as a difference.
+        const pad = (b) => ({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 });
+        ignore.push(pad(n.box), pad(p.el.box));
         if (n.kind === "text") continue; // texts were compared as text
         uiScaled ??= resize(uiImg, Math.round((snapshot.viewport?.w ?? design.frame.w) * k));
         if (boxDiffers(designImg, k, n.box, uiScaled, p.el.box)) {

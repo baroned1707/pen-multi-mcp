@@ -75,3 +75,28 @@ test("verify finds the page through .pen-multi.json routes; sync_status reports 
   assert.equal(noRoute.isError, true);
   assert.match(text(noRoute), /has no route for "Settings"/);
 });
+
+test("round trip on hard cases: label with input, padded text, inline code, tall line, icon button, fixed tab bar on a long page", async () => {
+  fs.writeFileSync(
+    path.join(dir, "hard.html"),
+    `<body style="margin:0;font-family:Arial;background:#fff">
+<label style="display:block;padding:8px">Email <input style="border:1px solid #ccc;width:120px"></label>
+<div style="padding:24px;background:#eee">Padded card text</div>
+<p style="margin:16px">Use <code style="background:#ddd">npm</code> here</p>
+<p style="margin:0 16px;font-size:16px;line-height:40px">Tall line</p>
+<button style="margin:16px;width:200px;height:44px;background:#2563EB;color:#fff;border:0">Save <svg width="16" height="16"><rect width="16" height="16" fill="#fff"/></svg></button>
+<div style="height:1400px"></div>
+<nav style="position:fixed;bottom:0;left:0;right:0;height:56px;background:#111827;color:#fff;display:flex;align-items:center;justify-content:space-around"><span>Home</span><span>Me</span></nav>
+</body>`,
+  );
+  const src = { kind: "web", url: `file://${path.join(dir, "hard.html")}` };
+  const imp = await call(client, "import_ui", { filePath: file, source: src, name: "Hard / cases" });
+  assert.ok(!imp.isError, text(imp));
+  const id = /"Hard – cases" \((\S+)\)/.exec(text(imp))?.[1];
+  assert.ok(id, `a name without "/": ${text(imp)}`);
+  const kids = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.name)))` })))[1]);
+  assert.ok(kids.some((n) => /input/i.test(n)), `the input inside the label is kept: ${kids.join(", ")}`);
+  assert.ok(kids.some((n) => /code/i.test(n)), "the inline code box is kept");
+  const v = await call(client, "verify", { filePath: file, target: id, source: src });
+  assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]|Verdict/.test(l)).join("\n"));
+});

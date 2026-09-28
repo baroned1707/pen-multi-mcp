@@ -568,9 +568,9 @@ tool(
 );
 
 designTools = registerDesignTools({ tool, z, route, app, pool, saver, timings, ok, fail, fromApp, textOf, optionalFilePath });
-const verifyTools = registerVerifyTools({ tool, z, route, design: designTools, withMachineLock, optionalFilePath, ok, conventions });
+const verifyTools = registerVerifyTools({ tool, z, route, design: designTools, withMachineLock, optionalFilePath, ok, conventions, saver });
 registerLintTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath });
-registerImportTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath, capture: verifyTools.capture, source: verifyTools.source, conventions });
+registerImportTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath, capture: verifyTools.capture, source: verifyTools.source, conventions, saver });
 
 let shuttingDown = false;
 async function shutdown() {
