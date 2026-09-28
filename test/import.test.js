@@ -178,3 +178,9 @@ test("stackLayout: even gaps make a column; uneven gaps or positioned children d
   assert.equal(stackLayout(parent, [box(10, 10, 100, 20), box(10, 38, 100, 20), box(10, 70, 100, 20)]), null);
   assert.equal(stackLayout(parent, [box(10, 10, 100, 20), { ...box(10, 38, 100, 20), absolute: true }]), null);
 });
+
+test("import_ui points out repeated structures that are not components", async () => {
+  fs.writeFileSync(path.join(dir, "list.html"), `<body style="margin:0;font-family:Arial">${["A", "B", "C"].map((t) => `<div style="margin:8px;height:40px;background:#EEE"><span>${t}</span></div>`).join("")}</body>`);
+  const res = await call(client, "import_ui", { filePath: file, source: { kind: "web", url: `file://${path.join(dir, "list.html")}` }, name: "List" });
+  assert.match(text(res), /Repeated like a component but not one: 3× "[^"]+"/);
+});

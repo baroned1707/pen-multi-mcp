@@ -55,7 +55,21 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
     const raw = (v) => typeof v === "string" && v.startsWith("#");
     const colors = specs.filter((x) => raw(x.props.fill) || raw(x.props.stroke)).length;
     const sizes = specs.filter((x) => typeof x.props.fontSize === "number" || typeof x.props.cornerRadius === "number").length;
-    return `Not on tokens yet: ${colors} node(s) with raw colors, ${sizes} with raw font sizes or radii (no token has those values). Components: elements whose marker names a design component (data-pen="<component id or name>") come in as its instances.`;
+    // Three or more sibling frames with the same size and the same kinds of children: likely one
+    // component drawn several times (list rows, cards) that the code has not marked.
+    const kids = new Map();
+    for (const x of specs) if (x.parent) (kids.get(x.parent) ?? kids.set(x.parent, []).get(x.parent)).push(x);
+    const repeated = [];
+    for (const [, list] of kids) {
+      const groups = new Map();
+      for (const x of list) {
+        if (x.props.type !== "frame") continue;
+        const sig = `${Math.round(x.props.width)}x${Math.round(x.props.height)}:${(kids.get(x.key) ?? []).map((c) => c.props.type).join(",")}`;
+        (groups.get(sig) ?? groups.set(sig, []).get(sig)).push(x);
+      }
+      for (const g of groups.values()) if (g.length >= 3) repeated.push(`${g.length}× "${g[0].props.name}"`);
+    }
+    return `Not on tokens yet: ${colors} node(s) with raw colors, ${sizes} with raw font sizes or radii (no token has those values).${repeated.length ? ` Repeated like a component but not one: ${repeated.slice(0, 5).join(", ")} — make it a component, or mark the code's with data-pen="<component id>".` : ""} Elements whose marker names a design component come in as its instances.`;
   }
 
   /**
