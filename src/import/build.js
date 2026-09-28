@@ -65,6 +65,9 @@ function textPlacement(el, origin) {
   // Left: from the line's start to the content box's end; right: from the content start to the
   // line's end; center: the whole content box (the line is centered in it).
   const y = r2(tb.y - origin.y); // the first line box's top
+  // One line in the code must stay one line in the design, whose font metrics differ slightly:
+  // it grows with its content from where the line starts, instead of wrapping at a fixed width.
+  if (el.fontSize && tb.h < el.fontSize * 1.9) return { x: r2(tb.x - origin.x), y, textGrowth: "auto", textAlign: align };
   if (align === "left") return { x: r2(tb.x - origin.x), y, width: r2(Math.max(tb.w + 1, cb.x + cb.w - tb.x)), textAlign: align };
   if (align === "right") return { x: r2(cb.x - origin.x), y, width: r2(Math.max(tb.w + 1, tb.x + tb.w - cb.x)), textAlign: align };
   return { x: r2(cb.x - origin.x), y, width: r2(Math.max(tb.w + 1, cb.w)), textAlign: align };
@@ -75,7 +78,7 @@ function textPlacement(el, origin) {
  * Elements that paint nothing are dropped and their children re-parented to the nearest kept
  * ancestor, so the imported tree is only as deep as what is visible.
  */
-export function buildSpecs(snapshot, { tokens = [], numbers = null, components = null, images = null, frameHeight } = {}) {
+export function buildSpecs(snapshot, { tokens = [], numbers = null, components = null, images = null, frameHeight, autoLayout = true } = {}) {
   const byIndex = new Map(snapshot.elements.map((el) => [el.i, el]));
   const kept = new Map(); // element index -> spec key (frames only: a text node cannot hold children)
   const specs = [];
@@ -109,6 +112,22 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
   };
   // Elements whose marker names a design component become instances; what is inside them is the
   // component's (texts become overrides when they line up with the component's texts).
+  const childCount = new Map();
+  const childrenOf = new Map();
+  for (const el of snapshot.elements) {
+    if (el.parent === undefined) continue;
+    childCount.set(el.parent, (childCount.get(el.parent) ?? 0) + 1);
+    (childrenOf.get(el.parent) ?? childrenOf.set(el.parent, []).get(el.parent)).push(el);
+  }
+  // Flexbox as captured, or a block whose children stack top to bottom with even gaps (a column).
+  const layouts = new Map();
+  for (const el of snapshot.elements) {
+    if (el.layout) layouts.set(el.i, el.layout);
+    else if (autoLayout) {
+      const st = stackLayout(el, childrenOf.get(el.i) ?? []);
+      if (st) layouts.set(el.i, st);
+    }
+  }
   const instanceOf = new Map(); // element index -> component
   const insideInstance = (el) => {
     for (let p = el.parent !== undefined ? byIndex.get(el.parent) : null; p; p = p.parent !== undefined ? byIndex.get(p.parent) : null) if (instanceOf.has(p.i)) return p;
@@ -132,14 +151,17 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
         });
         if (Object.keys(descendants).length) props.descendants = descendants;
       }
-      specs.push({ key: `n${seq++}`, parent, props });
+      specs.push({ key: `n${seq++}`, parent, props, el: el.i });
       continue;
     }
     const bg = tokenOrHex(el.bg, tokens);
     const border = el.borderWidth > 0 ? tokenOrHex(el.borderColor, tokens) : null;
     const visual = VISUAL_TAGS.test(el.tag ?? "") || el.icon;
     const text = el.text && !el.icon ? el.text : null;
-    if (!bg && !border && !visual && !text && !el.marker) continue;
+    // An unpainted flex container with several children is kept as a structural frame, so its
+    // children can be laid out by it (auto layout) instead of moving up to a painted ancestor.
+    const structural = autoLayout && layouts.get(el.i) && !layouts.get(el.i).wrap && (childCount.get(el.i) ?? 0) >= 2;
+    if (!bg && !border && !visual && !text && !el.marker && !structural) continue;
     const { key: parent, box: pbox } = keyOf(el);
     const own = boxOf(el);
     const x = r2(own.x - pbox.x), y = r2(own.y - pbox.y), w = r2(own.w), h = r2(own.h);
@@ -150,7 +172,7 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
     if (text && !bg && !border && !visual) {
       const props = { type: "text", name, content: text, textGrowth: "fixed-width", ...textPlacement({ ...el, box: own, contentBox: moved(el.contentBox), textBox: moved(el.textBox) }, pbox) };
       Object.assign(props, textStyle(el, tokens, numbers));
-      pending.push({ owner: el.i, spec: { key, parent, props } });
+      pending.push({ owner: el.i, spec: { key, parent, props, el: el.i } });
       continue; // not kept: its children (inline code, inputs) go to the nearest frame
     }
     const props = { type: "frame", name, x, y, width: w, height: h, layout: "none" };
@@ -164,16 +186,67 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
       props.stroke = border;
       props.strokeWidth = r2(el.borderWidth);
     }
-    specs.push({ key, parent, props });
+    specs.push({ key, parent, props, el: el.i });
     kept.set(el.i, key);
     if (text) {
       // A painted element with its own text: the text goes inside it.
       const tprops = { type: "text", name: `${name} text`, content: text, textGrowth: "fixed-width", ...textPlacement({ ...el, box: own, contentBox: moved(el.contentBox), textBox: moved(el.textBox) }, own) };
       Object.assign(tprops, textStyle(el, tokens, numbers));
-      specs.push({ key: `n${seq++}`, parent: key, props: tprops });
+      specs.push({ key: `n${seq++}`, parent: key, props: tprops, el: el.i, ownText: true });
     }
   }
   flushPending(null);
+  if (autoLayout) applyAutoLayout(specs, byIndex, layouts);
+  return specs;
+}
+
+/**
+ * A block's children as a column: at least two, each below the previous one, with the same gap
+ * between all of them (±0.5px), none positioned. Returns a flex-like layout, or null.
+ */
+export function stackLayout(el, kids) {
+  if (kids.length < 2 || kids.some((k) => k.fixed || k.absolute || k.sticky)) return null;
+  const gaps = [];
+  for (let i = 1; i < kids.length; i++) gaps.push(kids[i].box.y - (kids[i - 1].box.y + kids[i - 1].box.h));
+  if (gaps.some((g) => g < -0.5) || Math.max(...gaps) - Math.min(...gaps) > 0.5) return null;
+  const left = Math.min(...kids.map((k) => k.box.x));
+  const right = Math.max(...kids.map((k) => k.box.x + k.box.w));
+  const b = el.box;
+  const last = kids.at(-1).box;
+  return { dir: "column", gap: Math.max(0, gaps[0]), padding: [kids[0].box.y - b.y, b.x + b.w - right, b.y + b.h - (last.y + last.h), left - b.x].map((v) => Math.max(0, v)), align: "flex-start", justify: "flex-start", inferred: true };
+}
+
+const JUSTIFY = { normal: "start", "flex-start": "start", start: "start", left: "start", center: "center", "flex-end": "end", end: "end", right: "end", "space-between": "space_between", "space-around": "space_around", "space-evenly": "space_around" };
+const ALIGN = { "flex-start": "start", start: "start", "self-start": "start", center: "center", "flex-end": "end", end: "end", "self-end": "end" };
+
+/**
+ * Frames whose element is a flex container become auto layout — only where the imported children
+ * are exactly the element's own flex items (no dropped wrapper between them, nothing positioned,
+ * no wrapping or reversed direction). Children keep their x/y, so switching a frame back to
+ * layout "none" restores the measured placement (import_ui does that where the engine's layout
+ * does not reproduce the page). Marks each such spec with `auto: true`.
+ */
+export function applyAutoLayout(specs, byIndex, layouts = new Map()) {
+  const children = new Map();
+  for (const sp of specs) if (sp.parent) (children.get(sp.parent) ?? children.set(sp.parent, []).get(sp.parent)).push(sp);
+  for (const sp of specs) {
+    if (sp.props.type !== "frame") continue;
+    const el = byIndex.get(sp.el);
+    const lay = el && (layouts.get(el.i) ?? el.layout);
+    if (!lay || lay.wrap || /reverse/.test(lay.dir)) continue;
+    const kids = children.get(sp.key) ?? [];
+    if (!kids.length) continue;
+    const flexItems = kids.every((k) => {
+      const kel = byIndex.get(k.el);
+      return (k.ownText || kel?.parent === el.i) && !kel?.fixed && !kel?.absolute && !kel?.sticky;
+    });
+    if (!flexItems) continue;
+    const props = { layout: lay.dir.startsWith("column") ? "vertical" : "horizontal", gap: r2(lay.gap ?? 0), padding: lay.padding.map(r2) };
+    if (JUSTIFY[lay.justify]) props.justifyContent = JUSTIFY[lay.justify];
+    if (ALIGN[lay.align]) props.alignItems = ALIGN[lay.align];
+    Object.assign(sp.props, props);
+    sp.auto = true;
+  }
   return specs;
 }
 
@@ -208,6 +281,6 @@ export function snippets({ screen, specs, batch = 200, key = `__penImport_${Date
       `const M = ${G};\nif (!M) throw new Error("the import's state was lost (the editor restarted between batches); delete the partial frame and import again");\nfor (const [key, parent, props] of ${JSON.stringify(part)}) M[key] = Insert(parent ? M[parent] : M.root, props);\nPrint("DONE", ${Math.min(i + batch, specs.length)});`,
     );
   }
-  out.push(`delete ${G};\nPrint("CLEAN", 1);`);
+  out.push(`Print("KEYS", JSON.stringify(Object.fromEntries(Object.entries(${G}).filter(([k]) => k !== "root"))));\ndelete ${G};\nPrint("CLEAN", 1);`);
   return out;
 }

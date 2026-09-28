@@ -149,3 +149,32 @@ Insert(pill, { type: "text", name: "Label", content: "New", fill: "#FFFFFF", fon
   const texts = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "text" ? [n.content, n.fontSize] : undefined)))` })))[1]);
   assert.ok(texts.some(([c, s]) => c === "Card title" && s === 18), "18 is shared by two tokens, so it stays a number");
 });
+
+test("import_ui builds auto layout where the engine reproduces the page (flexbox, even column stacks) and keeps the round trip a MATCH", async () => {
+  fs.writeFileSync(
+    path.join(dir, "flex.html"),
+    `<body style="margin:0;font-family:Arial;background:#fff">
+<header style="height:56px;background:#0F172A;color:#fff;display:flex;align-items:center;padding:0 16px"><h1 style="margin:0;font-size:20px">Profile</h1></header>
+<main style="padding:16px;display:flex;flex-direction:column;gap:12px">
+<div style="background:#F1F5F9;border-radius:12px;padding:16px"><p style="margin:0;font-size:16px">First</p><p style="margin:8px 0 0;font-size:14px">Second</p></div>
+<button style="height:48px;border:0;border-radius:10px;background:#6366F1;color:#fff;font-size:16px">Go</button>
+</main></body>`,
+  );
+  const src = { kind: "web", url: `file://${path.join(dir, "flex.html")}` };
+  const res = await call(client, "import_ui", { filePath: file, source: src, name: "Flex" });
+  assert.match(text(res), /Auto layout: [1-9]\d* containers are auto-layout frames/);
+  const id = /"Flex" \((\S+)\)/.exec(text(res))[1];
+  const frames = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "frame" ? [n.name, n.layout, n.gap] : undefined)))` })))[1]);
+  assert.ok(frames.some(([name, layout, gap]) => name === "main" && layout === "vertical" && gap === 12), JSON.stringify(frames));
+  const v = await call(client, "verify", { filePath: file, target: id, source: src, crops: 0 });
+  assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
+});
+
+test("stackLayout: even gaps make a column; uneven gaps or positioned children do not", async () => {
+  const { stackLayout } = await import("../src/import/build.js");
+  const box = (x, y, w, h) => ({ box: { x, y, w, h } });
+  const parent = box(0, 0, 200, 100);
+  assert.deepEqual(stackLayout(parent, [box(10, 10, 100, 20), box(10, 38, 100, 20), box(10, 66, 100, 20)]), { dir: "column", gap: 8, padding: [10, 90, 14, 10], align: "flex-start", justify: "flex-start", inferred: true });
+  assert.equal(stackLayout(parent, [box(10, 10, 100, 20), box(10, 38, 100, 20), box(10, 70, 100, 20)]), null);
+  assert.equal(stackLayout(parent, [box(10, 10, 100, 20), { ...box(10, 38, 100, 20), absolute: true }]), null);
+});

@@ -19,6 +19,37 @@ const ago = (iso) => {
 };
 
 export function registerImportTools({ tool, z, route, design, executeSnippet, optionalFilePath, capture, source, conventions, saver }) {
+  /**
+   * Auto-layout frames are kept only where the engine lays their children out where the page had
+   * them (within 2px, relative to the frame); the others go back to layout "none" with each child
+   * at its measured x/y.
+   */
+  async function checkAutoLayout(target, rootId, specs, ids) {
+    const auto = specs.filter((sp) => sp.auto && ids[sp.key]);
+    if (!auto.length) return { line: "Positions are absolute (layout none): no container could be imported as auto layout (flexbox, or children stacked with even gaps).", kept: 0, failed: 0 };
+    const model = buildModel(await readSubtree(design.reader(target), rootId));
+    const kidsOf = new Map();
+    for (const sp of specs) if (sp.parent) (kidsOf.get(sp.parent) ?? kidsOf.set(sp.parent, []).get(sp.parent)).push(sp);
+    const failed = [];
+    for (const sp of auto) {
+      const box = model.nodes.get(ids[sp.key])?.abs;
+      const off = (kidsOf.get(sp.key) ?? []).some((k) => {
+        const kb = model.nodes.get(ids[k.key])?.abs;
+        return !box || !kb || Math.abs(kb.x - box.x - (k.props.x ?? 0)) > 2 || Math.abs(kb.y - box.y - (k.props.y ?? 0)) > 2;
+      });
+      if (off) failed.push(sp);
+    }
+    if (failed.length) {
+      const ops = failed.flatMap((sp) => [
+        `Update(${JSON.stringify(ids[sp.key])}, { layout: "none" })`,
+        ...(kidsOf.get(sp.key) ?? []).filter((k) => ids[k.key]).map((k) => `Update(${JSON.stringify(ids[k.key])}, { x: ${k.props.x ?? 0}, y: ${k.props.y ?? 0} })`),
+      ]);
+      const out = await executeSnippet({ filePath: target.file, input: ops.join("\n") });
+      if (out.isError) return { line: `Auto layout: ${auto.length - failed.length} frames kept; putting ${failed.length} back to absolute failed: ${out.content.map((c) => c.text ?? "").join(" ").slice(0, 200)}` };
+    }
+    return { line: `Auto layout: ${auto.length - failed.length} containers are auto-layout frames (flexbox, or children stacked with even gaps); ${failed.length} went back to absolute placement because the engine's layout did not reproduce the page within 2px; the other frames are absolute.`, kept: auto.length - failed.length, failed: failed.length };
+  }
+
   /** What is left to clean up in an import: raw colors and sizes no token has. */
   function cleanliness(specs) {
     const raw = (v) => typeof v === "string" && v.startsWith("#");
@@ -96,21 +127,26 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
       const screen = { type: "frame", name: frameName, x: Math.ceil(ctx.right + 200), y: 0, width: Math.round(vw), height: Math.round(vh), layout: "none", clip: true, fill: pageBg, ...(axis ? { theme: { [axis]: theme } } : {}) };
       let rootId = null;
       let created = 0;
+      let ids = {};
       for (const input of snippets({ screen, specs })) {
         const out = await executeSnippet({ filePath: target.file, input });
         const t = out.content.map((c) => c.text ?? "").join("\n");
         if (out.isError) throw new ReadError(`import stopped after ${created} of ${specs.length} nodes${rootId ? ` (partial frame ${rootId})` : ""}: ${t.slice(0, 400)}`);
         rootId ??= /ROOT (\S+)/.exec(t)?.[1];
+        const keys = /^KEYS (.*)$/m.exec(t);
+        if (keys) ids = JSON.parse(keys[1]);
         if (/CLEAN 1/.test(t)) continue;
         const done = /DONE (\d+)/.exec(t);
         if (done) created = Number(done[1]);
       }
+      const layout = await checkAutoLayout(target, rootId, specs, ids);
       return design.wrap(target, [
         `Imported ${created} nodes into a new frame "${frameName}" (${rootId}) at x ${screen.x}, ${Math.round(vw)}×${Math.round(vh)}.`,
         `${specs.filter((s) => s.props.type === "text").length} texts, ${specs.filter((s) => s.props.fill?.type === "image").length} image crops, ${specs.filter((s) => typeof s.props.fill === "string" && s.props.fill.startsWith("$")).length} fills on tokens, ${specs.filter((s) => s.props.type === "ref").length} component instances${axis ? `, drawn in ${axis} ${theme}` : ""}.`,
         cleanliness(specs),
         ...(snapshot.truncated ? ["The page has more elements than a capture keeps (6,000): the import is partial; import a narrower state or screen."] : []),
-        "Positions are absolute (layout none): turn sections into auto layout where the design should flow, name the layers, and replace crops with icons or components where they exist. lint the frame to see what is left.",
+        layout.line,
+        "Name the layers, replace crops with icons or components where they exist, and turn the remaining absolute sections into auto layout where the design should flow. lint the frame to see what is left.",
       ]);
     },
   );
