@@ -9,7 +9,9 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test --test-concurrency=1 --test-timeout=300000 test/*.test.js",
-    "bench": "node bench/bench.mjs"
+    "bench": "node bench/bench.mjs",
+    "bench:context": "node bench/context.mjs",
+    "eval": "node bench/eval/run.mjs"
   },
   "engines": {
     "node": ">=20"
