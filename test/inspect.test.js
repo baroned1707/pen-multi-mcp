@@ -263,3 +263,17 @@ test("compact: a first section larger than the limit is shown cut, like the full
   const lines = outline(m, { compact: true, maxLines: 2, continueWith: (id) => `inspect(${id})` });
   assert.match(lines.join("\n"), /output limit reached inside Header: inspect\(H\)/);
 });
+
+test("compact with a mapping: a mapped instance is one line naming its code component; tokens under code names", () => {
+  const r = structuredClone(raw);
+  r.nodes.push(node("P", "B", [16, 300, 358, 48], { type: "frame", name: "Primary", width: "fill_container", fill: "$bg" }));
+  r.nodes.push(node("P/l", "P", [16, 12, 100, 24], { type: "text", name: "Label", content: "Pay now", fontSize: 16, fill: "$ink" }));
+  r.refs = { P: ["Btn", ["l"], {}] };
+  r.comps = { Btn: "C/Button" };
+  const m = buildModel(r);
+  const lines = outline(m, { compact: true, component: (id) => (id === "Btn" ? { code: "Button", props: { variant: "primary" }, file: "web/Button.tsx", line: 4 } : null), codeName: (t) => ({ $bg: "--surface" })[t] });
+  const p = lines.find((l) => l.includes("Primary"));
+  assert.match(p, /Primary → Button variant="primary" \(web\/Button\.tsx:4\) · 358×48 @16,356 · w:fill h:auto · texts: "Pay now" · overrides 1/);
+  assert.equal(lines.filter((l) => l.includes("Pay now")).length, 1, "its children are the component's business");
+  assert.match(lines[0], /fill --surface\(#FFFFFF\)/);
+});

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildModel } from "./model.js";
 import { outline, sectionLines, sections, textDefaults, toJson } from "./inspect.js";
+import { projectMapping } from "../mapping/index.js";
 import { analyze, renderOverview } from "./overview.js";
 import { ReadError, readOverview, readSubtree } from "./read.js";
 
@@ -23,7 +24,7 @@ export function conventions(file) {
     const doc = JSON.parse(fs.readFileSync(path.resolve(path.dirname(p), f), "utf8"));
     flowEdges.push(...(doc.edges ?? []));
   }
-  return { screenPattern: conf.screenPattern, flowEdges, baseUrl: conf.baseUrl, routes: conf.routes ?? {}, states: conf.states ?? {} };
+  return { screenPattern: conf.screenPattern, flowEdges, baseUrl: conf.baseUrl, routes: conf.routes ?? {}, states: conf.states ?? {}, tokens: conf.tokens, components: conf.components };
 }
 
 const fileHash = (file) => (fs.existsSync(file) ? createHash("sha1").update(fs.readFileSync(file)).digest("hex") : null);
@@ -159,6 +160,25 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
     return lines;
   }
 
+  /** Components and tokens of a model mapped to the project's code, with what is missing. */
+  function codeMapping(target, model) {
+    const used = new Map();
+    for (const n of model.nodes.values()) if (n.component && !n.hidden) used.set(n.component.id, { id: n.component.id, name: n.component.name, instances: (used.get(n.component.id)?.instances ?? 0) + 1 });
+    const conv = conventions(target.file);
+    const m = projectMapping({ penFile: target.file, conv, variables: model.variables, themes: model.themes, components: [...used.values()] });
+    const lines = ["## Code"];
+    const mapped = [...m.components].filter(([, c]) => !c.problem);
+    if (used.size) {
+      lines.push(`- Components: ${mapped.length} of ${used.size} used here map to code${mapped.length ? `: ${mapped.map(([id, c]) => `${used.get(id)?.name} → ${c.code} (${c.file}${c.line ? `:${c.line}` : ""})`).join(", ")}` : ""}.`);
+      for (const [id, c] of m.components) if (c.problem) lines.push(`- ${used.get(id)?.name}: .pen-multi.json components entry — ${c.problem}.`);
+      if (m.components.unmapped.length) lines.push(`- Not mapped: ${m.components.unmapped.map((c) => `${c.name} ×${c.instances} (id ${c.id})`).join(", ")}. If the code has it, mark its definition with data-pen="<id>" (or testID/Key "pen:<id>"), or add .pen-multi.json { "components": { "<id>": { "code": "Name", "file": "path" } } }; else build it once and reuse it.`);
+    } else lines.push("- No component instances here.");
+    if (m.tokens.size) lines.push(`- Tokens are shown under their code names (${m.tokens.size} mapped${m.tokens.ambiguous.length ? `; ambiguous, shown as design tokens: ${m.tokens.ambiguous.map((a) => `${a.token} = ${a.candidates.join(" or ")}`).join(", ")}` : ""}).`);
+    else lines.push('- Tokens are shown as design variables: add .pen-multi.json { "tokens": { "file": "<the code\'s token file>" } } to see the code\'s names (matched by name, then by a unique value).');
+    lines.push(...m.notes.map((x) => `- ${x}`));
+    return { lines, codeName: m.codeName, component: (id) => { const c = m.component(id); return c && !c.problem ? c : null; }, mapping: m };
+  }
+
   tool(
     "inspect",
     `Read one screen or node of a .pen design as data to implement from, instead of looking at screenshots: where it sits (other widths, states, themes, flows in and out, components used), its sections in order with the app shell (docked header, tab bar) marked, and an outline with one line per node: absolute position and size, sizing (fill/hug/fixed), auto-layout, colors as token name plus the value in every theme, typography with line height in px, components and overrides, clipping. Repeated rows are collapsed. flavor adds code hints per node (tailwind, css or react-native) following pen.dev's layout rules. format "json" returns the full data for scripts; "html-ref" writes Pen's HTML export with its box-sizing bug fixed and layer names as data-pen. savePath writes the JSON (with the .pen's hash) so it can be re-read after context compaction.`,
@@ -275,8 +295,11 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
       } else if (detail === "full") {
         lines.push("", "## Outline", ...outline(model, { depth, maxLines, flavor, continueWith: more }));
       } else {
-        const defaults = textDefaults(model, { compact: true });
-        lines.push("", `## Outline (values in this frame's theme${defaults ? "; text defaults below" : ""}; detail "full" lists every theme)`, ...(defaults ? [defaults.line] : []), ...outline(model, { depth, maxLines, flavor, continueWith: more, compact: true, defaults }));
+        const map = codeMapping(target, model);
+        lines.push("", ...map.lines);
+        const o = { compact: true, codeName: map.codeName, component: map.component };
+        const defaults = textDefaults(model, o);
+        lines.push("", `## Outline (values in this frame's theme${defaults ? "; text defaults below" : ""}; detail "full" lists every theme)`, ...(defaults ? [defaults.line] : []), ...outline(model, { depth, maxLines, flavor, continueWith: more, ...o, defaults }));
       }
       return wrap(target, [...notes, ...lines]);
     },

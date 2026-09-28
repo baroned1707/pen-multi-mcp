@@ -411,6 +411,19 @@ export function hint(model, n, parent, flavor) {
  * The outline of a model: one line per visible node, repeated siblings collapsed, cut at `depth`
  * and `maxLines` with the follow-up call that continues from where it stopped.
  */
+/** A mapped instance as one line: its code component, box, sizing and the texts it shows. */
+export function instanceLine(model, n, code) {
+  const props = code.props ? Object.entries(code.props).map(([k, v]) => ` ${k}=${JSON.stringify(v)}`).join("") : "";
+  const where = code.file ? ` (${code.file}${code.line ? `:${code.line}` : ""})` : "";
+  const parts = [`${n.name ?? n.id} → ${code.code ?? n.component.name}${props}${where}`, `${num(n.abs.w)}×${num(n.abs.h)} @${num(n.abs.x)},${num(n.abs.y)}`];
+  const w = sizing(n.width), h = sizing(n.height);
+  if (w || h) parts.push(`w:${w ?? "auto"} h:${h ?? "auto"}`);
+  const shown = texts(n).filter(Boolean);
+  if (shown.length) parts.push(`texts: ${shown.slice(0, 6).map((t) => `"${t}"`).join(" ")}${shown.length > 6 ? " …" : ""}`);
+  if (n.component.overrides?.length) parts.push(`overrides ${n.component.overrides.length}`);
+  return parts.join(" · ");
+}
+
 /**
  * Values most text nodes share (font family, text color), stated once above a compact outline:
  * { font, color, line } or null. Each needs >= 3 texts and at least half of them.
@@ -445,7 +458,7 @@ export function textDefaults(model, o) {
  *   the ones left out with the call that shows each.
  * - onNode(id, lineIndex): called for every node with the line it is described on.
  */
-export function outline(model, { depth = 8, maxLines = 400, flavor, continueWith = (id) => id, onNode, compact = false, defaults = null, codeName } = {}) {
+export function outline(model, { depth = 8, maxLines = 400, flavor, continueWith = (id) => id, onNode, compact = false, defaults = null, codeName, component } = {}) {
   const { addresses: addr } = addresses(model);
   const o = compact ? { compact, defaults, codeName } : undefined;
   let lines = [];
@@ -459,6 +472,13 @@ export function outline(model, { depth = 8, maxLines = 400, flavor, continueWith
   const walk = (n, parent, level) => {
     if (truncatedAt) return;
     const pad = "  ".repeat(level);
+    // A mapped instance is its code component: one line, no children.
+    const code = o && n !== model.root && n.component && component?.(n.component.id);
+    if (code) {
+      if (!push(`${pad}${instanceLine(model, n, code)}`)) return (truncatedAt = n.id);
+      onNode?.(n.id, lines.length - 1);
+      return;
+    }
     if (!push(`${pad}${describe(model, n, o)}`)) return (truncatedAt = n.id);
     onNode?.(n.id, lines.length - 1);
     const h = hint(model, n, parent, flavor);

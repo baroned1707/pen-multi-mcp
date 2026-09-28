@@ -239,3 +239,19 @@ test("a fresh agent's second call reuses the analysis, and inspect by id right a
     await fresh.close();
   }
 });
+
+test("inspect maps components and tokens to the project's code", async () => {
+  fs.mkdirSync(path.join(dir, "web"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "web", "Button.tsx"), `export function Button({ children }) {\n  return <button data-pen="C/Button">{children}</button>;\n}\n`);
+  fs.writeFileSync(path.join(dir, "web", "tokens.css"), `:root { --text-strong: #111111; }\n.dark { --text-strong: #EEEEEE; }\n`);
+  fs.writeFileSync(path.join(dir, ".pen-multi.json"), JSON.stringify({ tokens: { file: "web/tokens.css" } }));
+  try {
+    const t = text(await call(client, "inspect", { filePath: file, target: "Checkout · light" }));
+    assert.match(t, /Components: 1 of \d+ used here map to code: C\/Button → Button \(web\/Button\.tsx:2\)/);
+    assert.match(t, /Not mapped: .*C\/\w+ ×\d \(id \w+\)/);
+    assert.match(t, /Primary → Button \(web\/Button\.tsx:2\) · /);
+    assert.match(t, /color --text-strong\(#111111\)/, "the $ink token under its code name");
+  } finally {
+    fs.rmSync(path.join(dir, ".pen-multi.json"));
+  }
+});
