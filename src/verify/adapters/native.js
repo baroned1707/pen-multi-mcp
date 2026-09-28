@@ -3,19 +3,24 @@
 // the screenshot inside each element's box.
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { readPngBuffer, sampleColors, writePng } from "../image.js";
 
 const bin = {
   adb: () => process.env.PEN_MULTI_ADB ?? "adb",
   xcrun: () => process.env.PEN_MULTI_XCRUN ?? "xcrun",
-  maestro: () => process.env.PEN_MULTI_MAESTRO ?? "maestro",
+  // maestro's installer puts it in ~/.maestro/bin, which MCP hosts often leave out of PATH.
+  maestro: () => process.env.PEN_MULTI_MAESTRO ?? (fs.existsSync(path.join(os.homedir(), ".maestro/bin/maestro")) ? path.join(os.homedir(), ".maestro/bin/maestro") : "maestro"),
 };
 
-export function run(cmd, args, { binary = false, timeout = 60_000 } = {}) {
+export function run(cmd, args, { binary = false, timeout = 60_000, env } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { encoding: binary ? "buffer" : "utf8", maxBuffer: 64 * 1024 * 1024, timeout }, (err, stdout, stderr) => {
+    execFile(cmd, args, { encoding: binary ? "buffer" : "utf8", maxBuffer: 64 * 1024 * 1024, timeout, env: env ?? process.env }, (err, stdout, stderr) => {
       if (err) {
-        const why = err.code === "ENOENT" ? `${cmd} is not installed or not on PATH` : `${String(stderr || err.message).trim().split("\n").slice(-3).join(" ")}`;
+        // The last meaningful lines (JVM warnings would otherwise hide the actual error).
+        const lines = String(stderr || "").split("\n").filter((l) => l.trim() && !/^WARNING\b/.test(l.trim()));
+        const why = err.code === "ENOENT" ? `${cmd} is not installed or not on PATH` : `${(lines.length ? lines.slice(-6).join(" ") : err.message).trim()}${err.killed ? " (timed out)" : ""}`;
         return reject(new Error(`${cmd} ${args.join(" ")} failed: ${why}`));
       }
       resolve(stdout);
@@ -23,6 +28,39 @@ export function run(cmd, args, { binary = false, timeout = 60_000 } = {}) {
   });
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// macOS ships /usr/bin/java as a stub that only asks to install Java: it does not count.
+const onPath = (bin) =>
+  (process.env.PATH ?? "").split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, bin)) && !(process.platform === "darwin" && path.join(d, bin) === "/usr/bin/java"));
+/**
+ * maestro runs on Java. MCP hosts often start servers with a bare PATH, so when neither JAVA_HOME
+ * nor java on PATH is there, point it at a JDK found in the usual places (Homebrew, Android Studio).
+ */
+function javaEnv() {
+  if (process.env.JAVA_HOME || onPath("java")) return process.env;
+  const brew = ["/opt/homebrew/opt", "/usr/local/opt"].flatMap((root) => {
+    try {
+      return fs.readdirSync(root).filter((n) => /^openjdk(@\d+)?$/.test(n)).map((n) => path.join(root, n, "libexec/openjdk.jdk/Contents/Home"));
+    } catch {
+      return [];
+    }
+  });
+  const candidates = [...brew, "/Applications/Android Studio.app/Contents/jbr/Contents/Home", "/Library/Java/JavaVirtualMachines"];
+  for (const c of candidates) {
+    let home = c;
+    if (c.endsWith("JavaVirtualMachines")) {
+      try {
+        const jdk = fs.readdirSync(c).find((n) => n.endsWith(".jdk"));
+        if (!jdk) continue;
+        home = path.join(c, jdk, "Contents/Home");
+      } catch {
+        continue;
+      }
+    }
+    if (fs.existsSync(path.join(home, "bin/java"))) return { ...process.env, JAVA_HOME: home, PATH: `${path.join(home, "bin")}${path.delimiter}${process.env.PATH ?? ""}` };
+  }
+  return process.env; // maestro will say it needs Java
+}
 
 const parseBounds = (s) => {
   const m = /\[(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\]\[(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\]/.exec(s ?? "");
@@ -72,6 +110,8 @@ export function parseUiautomator(xml) {
   return elements;
 }
 
+const hasLabel = (n) => Boolean(n.attributes?.text || n.attributes?.accessibilityText) || (n.children ?? []).some(hasLabel);
+
 /** Parses `maestro hierarchy` JSON (logs before it are skipped) into elements in points. */
 export function parseMaestro(out) {
   const text = String(out);
@@ -91,7 +131,9 @@ export function parseMaestro(out) {
         tag: a.class || a.elementType || undefined,
         selector: a["resource-id"] || a.accessibilityText || undefined,
         marker: pen(a["resource-id"], a.accessibilityText, a.identifier),
-        text: textOf(a.text || a.hintText),
+        // iOS labels carry their words in accessibilityText (text is often empty); take it from
+        // leaves only, so a row's combined label does not repeat its children's texts.
+        text: textOf(a.text || a.hintText || (!(node.children ?? []).some(hasLabel) ? a.accessibilityText : undefined)),
         box,
       });
     }
@@ -101,10 +143,14 @@ export function parseMaestro(out) {
   return elements;
 }
 
-/** Scales element boxes by 1/k and samples bg/fg colors from the screenshot at k pixels per unit. */
-export function withSampledColors(elements, img, k) {
+/**
+ * Samples bg/fg colors from the screenshot at k pixels per unit. Android's boxes are in pixels
+ * (divided by k to logical units); iOS's (maestro) are already in points.
+ */
+export function withSampledColors(elements, img, k, { pixels = true } = {}) {
   return elements.map((el) => {
-    const box = { x: el.box.x / k, y: el.box.y / k, w: el.box.w / k, h: el.box.h / k };
+    const d = pixels ? k : 1;
+    const box = { x: el.box.x / d, y: el.box.y / d, w: el.box.w / d, h: el.box.h / d };
     const { bg, fg } = sampleColors(img, box, k);
     return { ...el, box, bg, fg: el.text ? fg : undefined };
   });
@@ -140,25 +186,33 @@ async function android({ device, deepLink, settleMs }, screenshotPath) {
   return { img, k, elements: parseUiautomator(xml), device: device ?? "default" };
 }
 
+/** The booted simulator's UDID (maestro needs an explicit device when several are known). */
+async function bootedSimulator() {
+  const out = await run(bin.xcrun(), ["simctl", "list", "devices", "booted", "-j"]);
+  const devices = Object.values(JSON.parse(out).devices ?? {}).flat().filter((d) => d.state === "Booted");
+  if (!devices.length) throw new Error("no iOS simulator is booted; boot one (xcrun simctl boot <udid>) or pass source.device");
+  return devices[0].udid;
+}
+
 async function ios({ device, deepLink, settleMs }, screenshotPath) {
-  const target = device ?? "booted";
+  const target = device ?? (await bootedSimulator());
   if (deepLink) {
     await run(bin.xcrun(), ["simctl", "openurl", target, deepLink]);
     await sleep(settleMs);
   }
   await run(bin.xcrun(), ["simctl", "io", target, "screenshot", "--type=png", screenshotPath]);
-  const out = await run(bin.maestro(), [...(device ? ["--device", device] : []), "hierarchy"], { timeout: 120_000 });
+  const out = await run(bin.maestro(), ["--device", target, "hierarchy"], { timeout: 120_000, env: javaEnv() });
   const elements = parseMaestro(out);
   const img = readPngBuffer(fs.readFileSync(screenshotPath));
   const rootW = Math.max(...elements.filter((e) => e.parent === undefined).map((e) => e.box.x + e.box.w), 1);
-  return { img, k: img.width / rootW, elements, device: target };
+  return { img, k: img.width / rootW, elements, device: target, points: true };
 }
 
 /** Captures the current screen of an emulator / simulator / device. */
 export async function captureNative({ platform, device, deepLink, settleMs = 2000, screenshotPath }) {
   if (platform !== "android" && platform !== "ios") throw new Error(`source.platform must be "android" or "ios", not ${platform}`);
   const got = await (platform === "android" ? android : ios)({ device, deepLink, settleMs }, screenshotPath);
-  const elements = withSampledColors(got.elements, got.img, got.k);
+  const elements = withSampledColors(got.elements, got.img, got.k, { pixels: !got.points });
   return {
     snapshot: {
       version: 1,

@@ -226,6 +226,10 @@ test("maestro hierarchy JSON: logs before the JSON are skipped, boxes and ids re
   assert.equal(els[1].marker, "pen:Header/Title");
   assert.deepEqual(els[1].box, { x: 16, y: 60, w: 184, h: 24 });
   const img = blank(1179, 2556, [255, 255, 255]);
+  // maestro reports iOS points: boxes stay as they are, colors are sampled at 3 px per point.
+  const kept = withSampledColors(els, img, 3, { pixels: false });
+  assert.deepEqual(kept[1].box, { x: 16, y: 60, w: 184, h: 24 });
+  // uiautomator reports Android pixels: boxes are divided by the density.
   const scaled = withSampledColors(els, img, 3);
   assert.deepEqual(scaled[1].box, { x: 16 / 3, y: 20, w: 184 / 3, h: 8 });
 });

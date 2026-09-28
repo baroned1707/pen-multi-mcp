@@ -38,7 +38,8 @@ else if (a[0] === "shell" && a[1] === "wm") process.stdout.write("Physical densi
 );
 process.env.PEN_MULTI_XCRUN = script(
   "xcrun",
-  `if (args[0] === "simctl" && args[1] === "io") fs.copyFileSync(${JSON.stringify(shot)}, args[args.length - 1]);`,
+  `if (args[0] === "simctl" && args[1] === "io") fs.copyFileSync(${JSON.stringify(shot)}, args[args.length - 1]);
+if (args[0] === "simctl" && args[1] === "list") console.log(JSON.stringify({ devices: { "iOS-27-0": [{ udid: "SIM-1", state: "Booted" }] } }));`,
 );
 process.env.PEN_MULTI_MAESTRO = script(
   "maestro",
@@ -72,7 +73,8 @@ test("ios native: simctl screenshot and maestro hierarchy, points scaled by the 
   assert.equal(snapshot.viewport.w, 360);
   assert.equal(snapshot.viewport.scale, 3);
   assert.equal(snapshot.elements[1].marker, "pen:Header");
-  assert.deepEqual(calls().map((c) => c.split(" ").slice(0, 3).join(" ")), ["xcrun simctl openurl", "xcrun simctl io", "maestro hierarchy"]);
+  assert.deepEqual(snapshot.elements[1].box, { x: 0, y: 0, w: 360, h: 51 }, "iOS points are kept, not divided by the screen scale");
+  assert.deepEqual(calls().map((c) => c.split(" ").slice(0, 3).join(" ")), ["xcrun simctl list", "xcrun simctl openurl", "xcrun simctl io", "maestro --device SIM-1"]);
 });
 
 test("a missing tool fails with a clear message", async () => {

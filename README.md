@@ -52,7 +52,7 @@ claude mcp add pen-multi -s user -- node /absolute/path/to/pen-dev-mcp/src/index
 
 It can run next to the official `pencil` server.
 
-Requirements: Node 20+, a logged-in `@pen.dev/cli` (bundled), and for `verify` / `capture` / `import_ui` on the web a Chromium (`npx playwright install chromium`, or Google Chrome, or `PEN_MULTI_BROWSER`). Native sources need `adb` (Android) or `maestro` + Xcode's `simctl` (iOS); pen-probe needs nothing beyond the app's dev build.
+Requirements: Node 20+, a logged-in `@pen.dev/cli` (bundled), and for `verify` / `capture` / `import_ui` on the web a Chromium (`npx playwright install chromium`, or Google Chrome, or `PEN_MULTI_BROWSER`). Native sources need `adb` (Android) or `maestro` + Xcode's `simctl` (iOS; maestro is found in `~/.maestro/bin` and given a JDK from Homebrew or Android Studio when the MCP host's PATH has none); pen-probe needs nothing beyond the app's dev build.
 
 ### Safety
 
@@ -64,7 +64,7 @@ Requirements: Node 20+, a logged-in `@pen.dev/cli` (bundled), and for `verify` /
 
 ### Known limits
 
-- iOS is covered by the maestro/simctl adapter and pen-probe, tested with stand-in binaries; it has not been run against a real simulator here (Android and the web were run for real).
+- Checked for real on the web (Chromium), an Android emulator (uiautomator and pen-probe) and an iOS 27 simulator (maestro and pen-probe, Expo SDK 57 / new architecture). The old React Native architecture (Paper) is supported by pen-probe but was only tested with fake fibers.
 - Canvas/WebGL drawings and image contents are compared as pixels, not as elements.
 - pen-multi does not start apps, dev servers or simulators: `verify` needs a running URL or device.
 - The pen CLI's `execute` costs ~0.4 s per call; batch related work into one snippet.
