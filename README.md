@@ -52,6 +52,23 @@ claude mcp add pen-multi -s user -- node /absolute/path/to/pen-dev-mcp/src/index
 
 It can run next to the official `pencil` server.
 
+Requirements: Node 20+, a logged-in `@pen.dev/cli` (bundled), and for `verify` / `capture` / `import_ui` on the web a Chromium (`npx playwright install chromium`, or Google Chrome, or `PEN_MULTI_BROWSER`). Native sources need `adb` (Android) or `maestro` + Xcode's `simctl` (iOS); pen-probe needs nothing beyond the app's dev build.
+
+### Safety
+
+- pen-multi never opens, focuses or raises the user's windows; browsers run headless.
+- The pen-probe listener binds to localhost and only while a capture runs (`PEN_MULTI_PROBE_LAN=1` for devices on Wi-Fi), and caps posted bodies at 50 MB.
+- Password fields are never captured as text.
+- Generated files never overwrite files they did not write: captures, token files, reference HTML, inspect specs and contact sheets all check before writing.
+- Commands for devices run with argument arrays (no shell).
+
+### Known limits
+
+- iOS is covered by the maestro/simctl adapter and pen-probe, tested with stand-in binaries; it has not been run against a real simulator here (Android and the web were run for real).
+- Canvas/WebGL drawings and image contents are compared as pixels, not as elements.
+- pen-multi does not start apps, dev servers or simulators: `verify` needs a running URL or device.
+- The pen CLI's `execute` costs ~0.4 s per call; batch related work into one snippet.
+
 ## Tools
 
 | Tool | Purpose |
@@ -111,7 +128,7 @@ verify({ filePath: "app.pen", target: "Checkout", width: 390, theme: "dark",
 
 Elements are paired with design nodes by **marker** first — `data-pen="Header/Title"` on web, `testID="pen:Header/Title"` in React Native, a `pen:` resource-id / accessibility id natively; the value is a node id, a layer address from `inspect`, an address suffix, or a unique layer name, and repeated rows share one marker — then by **equal text**, then containers by the texts they hold, then by box overlap. Without markers the report says so and lists what was matched only by position. Phone chrome drawn into mockups (status bar, home indicator) is skipped. Tolerances default to 4 px position/size (5 % of large boxes), ΔE 10, 1 px font size, 100 font weight, and can be overridden per call.
 
-The web capture scrolls through the page first (so scroll-revealed content is shown), follows open shadow roots, treats a paragraph with inline children (links, `<strong>`, `<br>`) as one text, skips text hidden by ancestors or clipped by `overflow`, drops icon-font ligatures, and flags text cut by ellipsis or line clamp. `::before`/`::after` text joins its element's text, and same-origin iframes are read in place. Not read as elements: cross-origin iframes (marked `frame: "cross-origin"`), image `alt` text, canvas drawings (the pixel comparison still covers them). Fixed and sticky bars are compared against the viewport's bottom as well as the frame's.
+The web capture scrolls through the page first (so scroll-revealed content is shown), follows open shadow roots, treats a paragraph with inline children (links, `<strong>`, `<br>`) as one text, skips text hidden by ancestors or clipped by `overflow`, drops icon-font ligatures, and flags text cut by ellipsis or line clamp. `::before`/`::after` text joins its element's text, and iframes are read in place (cross-origin ones through the browser). Canvas and WebGL drawings have no elements: they are compared as pixels, like images. Fixed and sticky bars are compared against the viewport's bottom as well as the frame's.
 
 `capture` stores a snapshot on its own (to verify again later with `snapshot`, or to look at what the UI renders); `contact_sheet` puts several verify reports into one image and returns it inline.
 

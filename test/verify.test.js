@@ -302,3 +302,23 @@ test("a password is never captured as text", async () => {
   const snap = JSON.parse(raw);
   assert.deepEqual(snap.elements.filter((e) => e.text).map((e) => e.text), ["•••••••••••••".slice(0, 12), "Password"]);
 });
+
+test("cross-origin iframes are read through the browser and placed at their frame", async () => {
+  const http = await import("node:http");
+  const inner = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end(`<body style="margin:0"><h2 style="margin:0;font-size:18px">Cross origin content</h2></body>`);
+  });
+  await new Promise((r) => inner.listen(0, "127.0.0.1", r));
+  try {
+    fs.writeFileSync(path.join(dir, "xo.html"), `<body style="margin:0"><iframe src="http://127.0.0.1:${inner.address().port}/" style="position:absolute;left:40px;top:100px;width:220px;height:80px;border:3px solid #000"></iframe></body>`);
+    const cap = await call(client, "capture", { source: { kind: "web", url: url("xo.html") }, savePath: "xo-capture" });
+    assert.ok(!cap.isError, text(cap));
+    const snap = JSON.parse(fs.readFileSync(path.join(dir, "xo-capture.json"), "utf8"));
+    const h2 = snap.elements.find((e) => e.text === "Cross origin content");
+    assert.deepEqual([h2.box.x, h2.box.y], [43, 103]);
+    assert.match(h2.selector, /^iframe > /);
+  } finally {
+    inner.close();
+  }
+});

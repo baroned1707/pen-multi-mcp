@@ -316,6 +316,62 @@ async function revealAll(page) {
   await page.waitForTimeout(300);
 }
 
+/**
+ * Cross-origin iframes cannot be read from the page, but the browser can read them directly: each
+ * child frame is collected on its own and placed at its iframe element's content box.
+ */
+async function addCrossOriginFrames(frame, data, limit, depth = 0) {
+  if (depth > 3) return;
+  for (const child of frame.childFrames()) {
+    if (data.elements.length >= limit) return;
+    let handle, info;
+    try {
+      handle = await child.frameElement();
+      info = await handle.evaluate((el) => {
+        const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+        let sameOrigin = false;
+        try {
+          sameOrigin = Boolean(el.contentDocument);
+        } catch {}
+        return {
+          sameOrigin,
+          x: r.left + window.scrollX + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.paddingLeft) || 0),
+          y: r.top + window.scrollY + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.paddingTop) || 0),
+          box: { x: r.left + window.scrollX, y: r.top + window.scrollY, w: r.width, h: r.height },
+        };
+      });
+    } catch {
+      continue; // detached or not rendered
+    }
+    if (info.sameOrigin) continue; // already read in place by collect()
+    // Offsets of a nested frame: the outer frames' positions were added by the caller.
+    info.x += data.offsetX ?? 0;
+    info.y += data.offsetY ?? 0;
+    const owner = data.elements.find((e) => e.tag === "iframe" && Math.abs(e.box.x - (info.box.x + (data.offsetX ?? 0))) < 1 && Math.abs(e.box.y - (info.box.y + (data.offsetY ?? 0))) < 1);
+    let inner;
+    try {
+      inner = await child.evaluate(collect, limit - data.elements.length);
+    } catch {
+      continue;
+    }
+    const base = data.elements.length;
+    const shift = (b) => (b ? { ...b, x: b.x + info.x, y: b.y + info.y } : b);
+    for (const el of inner.elements) {
+      data.elements.push({
+        ...el,
+        i: base + el.i,
+        parent: el.parent === undefined ? owner?.i : base + el.parent,
+        box: shift(el.box),
+        textBox: shift(el.textBox),
+        contentBox: shift(el.contentBox),
+        selector: `iframe > ${el.selector}`,
+      });
+    }
+    if (inner.truncated) data.truncated = true;
+    await addCrossOriginFrames(child, { ...data, offsetX: info.x, offsetY: info.y, elements: data.elements }, limit, depth + 1);
+  }
+}
+
 async function runStep(page, step) {
   if (step.click) return page.click(step.click, { timeout: 10_000 });
   if (step.fill) return page.fill(step.fill[0], String(step.fill[1] ?? ""), { timeout: 10_000 });
@@ -347,6 +403,7 @@ export async function captureWeb({ url, steps = [], fullPage = true, width, heig
     await page.evaluate(() => document.fonts?.ready);
     await page.waitForTimeout(150);
     const data = await page.evaluate(collect, limit);
+    await addCrossOriginFrames(page.mainFrame(), data, limit);
     await page.screenshot({ path: screenshotPath, fullPage });
     return {
       snapshot: {

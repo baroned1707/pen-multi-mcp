@@ -62,7 +62,7 @@ Many agents and projects:
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "0.9.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "1.0.0" }, { instructions: INSTRUCTIONS });
 
 const filePath = z
   .string()
