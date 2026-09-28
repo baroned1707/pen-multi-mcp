@@ -105,11 +105,20 @@ test("inspect resolves a dark frame's colors in its own theme", async () => {
   assert.deepEqual(body.duplicateNames, ["Home · dark/Content/List/Row"]);
 });
 
-test("ambiguous names list the candidates instead of guessing", async () => {
-  const res = await call(client, "inspect", { filePath: file, target: "Home" });
+test("ambiguous names list the candidates instead of guessing (json)", async () => {
+  const res = await call(client, "inspect", { filePath: file, target: "Home", format: "json" });
   assert.equal(res.isError, true);
   assert.match(text(res), /matches 2 frames/);
   assert.match(text(res), /Home · light \(390, light\) → \w+/, "each candidate shows its width and theme");
+});
+
+test("a screen name with several frames: one base frame in full, the others as differences", async () => {
+  const res = await call(client, "inspect", { filePath: file, target: "Home", image: false });
+  assert.ok(!res.isError, text(res));
+  const t = text(res);
+  assert.match(t, /"Home" is 2 frames: Home · light \(\w+\) in full, the others as differences below\./);
+  assert.match(t, /## Variants \(base above: Home · light \(\w+, 390, light\)/);
+  assert.match(t, /- Home · dark \(\w+, 390, dark\): same nodes and values; only token values differ \(theme\)\./);
 });
 
 test("savePath writes the spec with the .pen's hash, and flags a stale previous spec", async () => {
@@ -254,4 +263,16 @@ test("inspect maps components and tokens to the project's code", async () => {
   } finally {
     fs.rmSync(path.join(dir, ".pen-multi.json"));
   }
+});
+
+test("inspect attaches a labelled render the first time a node is inspected, then only on request", async () => {
+  const target = "Home · dark";
+  const images = (res) => res.content.filter((c) => c.type === "image").length;
+  const first = await call(client, "inspect", { filePath: file, target, detail: "summary" });
+  assert.equal(images(first), 1);
+  assert.match(text(first), /Design render: Home · dark \(\w+\)\. Use it for the overall look; take every number from the outline\./);
+  assert.equal(first.content[1].type, "text", "the label comes right before the image");
+  assert.equal(images(await call(client, "inspect", { filePath: file, target, detail: "summary" })), 0);
+  assert.equal(images(await call(client, "inspect", { filePath: file, target, detail: "summary", image: true })), 1);
+  assert.ok(!fs.existsSync(path.join(dir, "design-verify")), "nothing is written into the project");
 });

@@ -2,10 +2,13 @@
 // as data an agent can implement from). Both only read; they never mark a file dirty or save it.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { buildModel } from "./model.js";
 import { outline, sectionLines, sections, textDefaults, toJson } from "./inspect.js";
 import { projectMapping } from "../mapping/index.js";
+import { pickBase, variantLines } from "./variants.js";
+import { crop, pngBuffer, readPng, resize } from "../verify/image.js";
 import { analyze, renderOverview } from "./overview.js";
 import { ReadError, readOverview, readSubtree } from "./read.js";
 
@@ -123,7 +126,10 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
     const loose = exact.length ? exact : frames.filter((c) => c.row.code?.toLowerCase() === lower || c.name.toLowerCase().includes(lower));
     if (loose.length === 1) return { id: loose[0].id, frame: loose[0], analysis };
     if (loose.length > 1) {
-      throw new ReadError(`"${wanted}" matches ${loose.length} frames; pass one id (or width/theme where the tool takes them):\n` + loose.slice(0, 30).map((c) => `- ${c.name}${variant(c)} → ${c.id}`).join("\n"));
+      const err = new ReadError(`"${wanted}" matches ${loose.length} frames; pass one id (or width/theme where the tool takes them):\n` + loose.slice(0, 30).map((c) => `- ${c.name}${variant(c)} → ${c.id}`).join("\n"));
+      err.candidates = loose;
+      err.analysis = analysis;
+      throw err;
     }
     if (!refreshed) return resolveTarget(target, wanted, { refreshed: true }); // the document may have changed
     const words = lower.split(/[\s·—-]+/).filter((w) => w.length > 1);
@@ -160,6 +166,45 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
     return lines;
   }
 
+  // Renders already attached in this session: file|id|design hash.
+  const shown = new Set();
+  const MAX_EDGE = 1568; // larger images are scaled down by the model anyway
+
+  /**
+   * A labelled render of a node for inspect: attached the first time the node (at this version of
+   * the design) is inspected in the session, or as `want` says. Tall frames show their top part.
+   * Never fails the call: a render that does not work is simply left out.
+   */
+  async function designImage(target, run, id, model, want) {
+    const key = `${target.file}|${id}|${target.mode === "app" ? "live" : fileHash(target.file)}`;
+    if (want === false || (want === undefined && shown.has(key))) return null;
+    try {
+      // A temp folder: inspect never writes into the project on its own.
+      const dir = path.join(os.tmpdir(), "pen-multi-render", createHash("sha1").update(target.file).digest("hex").slice(0, 10));
+      fs.mkdirSync(dir, { recursive: true });
+      const out = await run(`Export(${JSON.stringify([id])}, "png", ${JSON.stringify(dir)})`);
+      if (out.error) return null;
+      const file = /Exported (.+\.png)/.exec(out.text ?? "")?.[1]?.trim() ?? path.join(dir, `${id}.png`);
+      if (!fs.existsSync(file)) return null;
+      let img = readPng(file);
+      let note = "";
+      if (img.height > img.width * 2.2) {
+        const h = Math.round(img.width * 2);
+        const scale = img.height / (model.root.abs?.h || img.height);
+        img = crop(img, { x: 0, y: 0, w: img.width, h });
+        note = `, top ${Math.round(h / scale)}px of ${Math.round(model.root.abs?.h ?? 0)}px; inspect a section with image: true for the rest`;
+      }
+      if (Math.max(img.width, img.height) > MAX_EDGE) img = resize(img, Math.round((img.width * MAX_EDGE) / Math.max(img.width, img.height)));
+      shown.add(key);
+      return {
+        label: `Design render: ${model.root.name ?? id} (${id})${note}. Use it for the overall look; take every number from the outline.`,
+        image: { type: "image", data: pngBuffer(img).toString("base64"), mimeType: "image/png" },
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /** Components and tokens of a model mapped to the project's code, with what is missing. */
   function codeMapping(target, model) {
     const used = new Map();
@@ -191,10 +236,21 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
       format: z.enum(["outline", "json", "html-ref"]).optional().describe("outline (default), json, or html-ref."),
       detail: z.enum(["summary", "normal", "full"]).optional().describe('outline detail: "normal" (default) shows values in the frame\'s own theme, states shared text defaults once and keeps whole sections under maxLines; "full" also lists every theme\'s value on every line; "summary" gives only the sections.'),
       savePath: z.string().optional().describe("Write the JSON spec here (relative to the agent's working directory), e.g. design-spec/home.json."),
+      image: z.boolean().optional().describe("Attach a render of the node before the outline. Default: only the first time this node (at this version of the design) is inspected in this session."),
     },
-    async ({ filePath: f, target: wanted, depth = 8, maxLines = 400, flavor, format = "outline", detail = "normal", savePath }) => {
+    async ({ filePath: f, target: wanted, depth = 8, maxLines = 400, flavor, format = "outline", detail = "normal", savePath, image }) => {
       const target = await route(f);
-      const resolved = await resolveTarget(target, wanted);
+      // A screen name matching several frames (widths × themes × states): the outline shows one
+      // base frame and the others as differences from it.
+      let resolved, variantsOf = null;
+      try {
+        resolved = await resolveTarget(target, wanted);
+      } catch (err) {
+        if (!err.candidates || format !== "outline") throw err;
+        const base = pickBase(err.candidates);
+        resolved = { id: base.id, frame: base, analysis: err.analysis };
+        variantsOf = err.candidates.filter((c) => c.id !== base.id);
+      }
       const { id, frame, analysis } = resolved;
       const run = reader(target);
       const raw = resolved.raw ?? (await readSubtree(run, id));
@@ -301,7 +357,18 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
         const defaults = textDefaults(model, o);
         lines.push("", `## Outline (values in this frame's theme${defaults ? "; text defaults below" : ""}; detail "full" lists every theme)`, ...(defaults ? [defaults.line] : []), ...outline(model, { depth, maxLines, flavor, continueWith: more, ...o, defaults }));
       }
-      return wrap(target, [...notes, ...lines]);
+      if (variantsOf) {
+        const MAX_VARIANTS = 12;
+        const others = [];
+        for (const c of variantsOf.slice(0, MAX_VARIANTS)) others.push({ frame: c, model: buildModel(await readSubtree(run, c.id)) });
+        lines.push("", ...variantLines(frame, model, others, { more }));
+        if (variantsOf.length > MAX_VARIANTS) lines.push(`… ${variantsOf.length - MAX_VARIANTS} more frames of "${wanted}": ${variantsOf.slice(MAX_VARIANTS).map((c) => c.id).join(", ")}`);
+        lines.unshift(`"${wanted}" is ${variantsOf.length + 1} frames: ${frame.name} (${id}) in full, the others as differences below.`);
+      }
+      const res = wrap(target, [...notes, ...lines]);
+      const shot = await designImage(target, run, id, model, image);
+      if (shot) res.content.splice(1, 0, { type: "text", text: shot.label }, shot.image);
+      return res;
     },
   );
   return { invalidate, resolveTarget, reader, wrap, analysisOf };

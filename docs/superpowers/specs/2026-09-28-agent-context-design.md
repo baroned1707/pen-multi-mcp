@@ -109,7 +109,7 @@ The v1.2.0 baseline is recorded before any change below.
   - layout changes;
   - property changes.
 
-  If a variant's differences exceed about 50% of its outline, that variant is given in full, with the reason. A theme variant is checked to differ only through tokens; any difference not made through a token is flagged.
+  A variant is compared with the same-width frame of the base theme when there is one (a dark 320 frame against the light 320 frame, chosen by the most shared name parts), else with the base. Widths equal to the screen width count as the same. If a variant's differences (whole added or removed subtrees included) exceed about 50% of its nodes, it is not inlined: the line gives the share and the call for its own outline, which keeps the output bounded when many variants differ. A theme variant is checked to differ only through tokens; any difference not made through a token is flagged.
 - **A component as target** returns its API instead of an outline:
   - slots;
   - overridable descendants, taken from real instances' `descendants`;
