@@ -22,6 +22,8 @@ async function launch() {
 
 /** Runs in the page: collects visible elements in document order (open shadow roots included). */
 function collect(limit) {
+  // Elements of same-origin iframes need their own window's getComputedStyle.
+  const gcs = (e, pseudo) => (e.ownerDocument.defaultView || window).getComputedStyle(e, pseudo);
   const out = [];
   const index = new Map();
   const sx = window.scrollX, sy = window.scrollY;
@@ -57,7 +59,7 @@ function collect(limit) {
     return parts.join(" > ");
   };
   // overflow on <body> moves to the viewport when <html> has none: body then clips nothing.
-  const htmlOverflowVisible = getComputedStyle(document.documentElement).overflow === "visible";
+  const htmlOverflowVisible = gcs(document.documentElement).overflow === "visible";
   // Clipped away entirely by an ancestor with overflow other than visible? Only ancestors that
   // contain the element's box count: an absolute box escapes static ancestors, a fixed one all.
   const clipped = (el, r, cs) => {
@@ -65,7 +67,7 @@ function collect(limit) {
     let x1 = r.left, y1 = r.top, x2 = r.right, y2 = r.bottom;
     let escapesStatic = cs.position === "absolute";
     for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) {
-      const ps = getComputedStyle(p);
+      const ps = gcs(p);
       const positioned = ps.position !== "static";
       if (!(escapesStatic && !positioned) && !(p === document.body && htmlOverflowVisible) && !(ps.overflowX === "visible" && ps.overflowY === "visible")) {
         const pr = p.getBoundingClientRect();
@@ -88,7 +90,16 @@ function collect(limit) {
   const srOnly = (r, cs) => /rect\(0(px)?,? 0(px)?,? 0(px)?,? 0(px)?\)/.test(cs.clip) || /inset\(50%/.test(cs.clipPath);
   const tiny = (r, cs) => r.width <= 1 && r.height <= 1 && cs.overflow !== "visible";
   // Parked entirely off the page (skip links, closed drawers); its children may still be on it.
-  const offPage = (r) => r.right + sx <= 0 || r.bottom + sy <= 0 || r.left + sx >= pageW || r.top + sy >= pageH;
+  const offPage = (r, ox = 0, oy = 0) => r.right + sx + ox <= 0 || r.bottom + sy + oy <= 0 || r.left + sx + ox >= pageW || r.top + sy + oy >= pageH;
+  // Literal text a ::before/::after adds ("New" badges, required asterisks); counters and icons are skipped.
+  const pseudoText = (el, which) => {
+    const c = gcs(el, which).content;
+    if (!c || c === "none" || c === "normal") return "";
+    const m = /^"((?:[^"\\]|\\.)*)"$/.exec(c);
+    if (!m) return "";
+    const t = m[1].replace(/\\(.)/g, "$1");
+    return /^[\uE000-\uF8FF\s]*$/u.test(t) ? "" : t;
+  };
   // The color an SVG paints: its first painted shape's fill (or stroke); unknown when none is set.
   const svgColor = (svg) => {
     const paint = (v) => v && v !== "none" && !/^url/.test(v) && !/^rgba\(0, 0, 0, 0\)$/.test(v);
@@ -99,7 +110,7 @@ function collect(limit) {
     // Shapes that are drawn: not the ones inside masks, clip paths, definitions or patterns.
     const shapes = [...svg.querySelectorAll("path, circle, rect, polygon, polyline, line, ellipse, use")].filter((x) => !x.closest("mask, clipPath, defs, symbol, pattern, marker"));
     for (const shape of shapes) {
-      const cs = getComputedStyle(shape);
+      const cs = gcs(shape);
       if (shape.getAttribute("fill") === "none") {
         if (paint(cs.stroke)) return cs.stroke;
         continue;
@@ -108,14 +119,14 @@ function collect(limit) {
       if (shape.tagName === "use" && cs.fill === "rgb(0, 0, 0)" && !declared(shape)) {
         const ref = (shape.getAttribute("href") || shape.getAttribute("xlink:href") || "").replace(/^#/, "");
         const target = ref && document.getElementById(ref);
-        const painted = target && [target, ...target.querySelectorAll("*")].find((t) => t.getAttribute("fill") && paint(getComputedStyle(t).fill));
-        if (painted) return getComputedStyle(painted).fill;
+        const painted = target && [target, ...target.querySelectorAll("*")].find((t) => t.getAttribute("fill") && paint(gcs(t).fill));
+        if (painted) return gcs(painted).fill;
       }
       // Plain black with nothing declared is SVG's initial fill, not a choice: leave it unknown.
       if (paint(cs.fill) && !(cs.fill === "rgb(0, 0, 0)" && !declared(shape))) return cs.fill;
       if (paint(cs.stroke)) return cs.stroke;
     }
-    const own = getComputedStyle(svg);
+    const own = gcs(svg);
     return paint(own.fill) && (own.fill !== "rgb(0, 0, 0)" || declared(svg)) ? own.fill : undefined;
   };
 
@@ -124,14 +135,14 @@ function collect(limit) {
   // inline-block / inline-flex children (buttons, chips, badges) stay separate texts.
   const phrasing = (el) =>
     [...el.children].every((c) => {
-      const cs = getComputedStyle(c);
+      const cs = gcs(c);
       return /^(inline|contents)$/.test(cs.display) && !ICON_FONT.test(cs.fontFamily) && phrasing(c);
     });
   const owned = new Set(); // elements whose text belongs to an ancestor's paragraph
 
-  const visit = (el) => {
+  const visit = (el, ox = 0, oy = 0) => {
     if (out.length >= limit) return;
-    const cs = getComputedStyle(el);
+    const cs = gcs(el);
     if (cs.display === "none") return;
     // visibility:hidden hides only this element (a visible child still shows): keep descending.
     const invisible = cs.visibility !== "visible";
@@ -139,7 +150,7 @@ function collect(limit) {
     if (!invisible && (el.checkVisibility ? !el.checkVisibility({ opacityProperty: true }) : Number(cs.opacity) === 0) && cs.display !== "contents") return;
     const r = el.getBoundingClientRect();
     if (srOnly(r, cs)) return;
-    const shown = !invisible && r.width > 0 && r.height > 0 && !tiny(r, cs) && !offPage(r) && !clipped(el, r, cs);
+    const shown = !invisible && r.width > 0 && r.height > 0 && !tiny(r, cs) && !offPage(r, ox, oy) && !clipped(el, r, cs);
     if (shown) {
       let text = "";
       if (el.tagName === "INPUT") text = TEXT_INPUT.test(el.type) ? el.value || el.placeholder || "" : "";
@@ -154,6 +165,10 @@ function collect(limit) {
           text = el.innerText;
           for (const d of el.querySelectorAll("*")) owned.add(d);
         } else if (own.trim()) text = el.children.length === 0 && el.innerText ? el.innerText : own;
+      }
+      if (!ICON_FONT.test(cs.fontFamily) && !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) {
+        const before = pseudoText(el, "::before"), after = pseudoText(el, "::after");
+        if (before || after) text = `${before} ${text} ${after}`;
       }
       text = text.replace(/\s+/g, " ").trim();
       let parent;
@@ -179,7 +194,8 @@ function collect(limit) {
         text: text || undefined,
         truncated: truncated || undefined,
         fixed: cs.position === "fixed" || cs.position === "sticky" || undefined,
-        box: { x: r.left + sx, y: r.top + sy, w: r.width, h: r.height },
+        box: { x: r.left + sx + ox, y: r.top + sy + oy, w: r.width, h: r.height },
+        frame: el.tagName === "IFRAME" ? (el.contentDocument ? "same-origin" : "cross-origin") : undefined,
         bg: cs.backgroundColor,
         // Text color, or the color an icon paints (SVG fill, icon-font glyph).
         fg: text ? cs.color : el.tagName === "svg" ? svgColor(el) : ICON_FONT.test(cs.fontFamily) ? cs.color : undefined,
@@ -195,12 +211,24 @@ function collect(limit) {
       index.set(el, o.i);
       out.push(o);
     }
-    for (const c of el.children) visit(c);
-    if (el.shadowRoot) for (const c of el.shadowRoot.children) visit(c);
+    for (const c of el.children) visit(c, ox, oy);
+    if (el.shadowRoot) for (const c of el.shadowRoot.children) visit(c, ox, oy);
+    // Same-origin iframes: their content, placed at the iframe's content box.
+    if (el.tagName === "IFRAME" && shown) {
+      let doc = null;
+      try {
+        doc = el.contentDocument;
+      } catch {}
+      if (doc?.body) {
+        const bl = parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft) || 0, bt = parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop) || 0;
+        // Rects inside the iframe are relative to its viewport; the page position adds the iframe's.
+        visit(doc.body, ox + r.left + bl, oy + r.top + bt);
+      }
+    }
   };
   visit(document.body);
-  const bodyBg = getComputedStyle(document.body).backgroundColor;
-  const pageBg = /^rgba\(0, 0, 0, 0\)$|^transparent$/.test(bodyBg) ? getComputedStyle(document.documentElement).backgroundColor : bodyBg;
+  const bodyBg = gcs(document.body).backgroundColor;
+  const pageBg = /^rgba\(0, 0, 0, 0\)$|^transparent$/.test(bodyBg) ? gcs(document.documentElement).backgroundColor : bodyBg;
   return { elements: out, pageBg, truncated: out.length >= limit, scroll: { w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight } };
 }
 

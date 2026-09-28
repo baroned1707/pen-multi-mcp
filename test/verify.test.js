@@ -267,3 +267,19 @@ test("1px screen-reader-only boxes (Drupal clip rect(1px…), plain 1px overflow
   assert.deepEqual(snap.elements.filter((e) => e.text).map((e) => e.text), ["Escapes", "Shown"]);
   assert.equal(snap.elements.find((e) => e.tag === "svg").fg, "rgb(255, 0, 0)");
 });
+
+test("web capture: ::before/::after text joins the element's text; same-origin iframes are read at their place", async () => {
+  fs.writeFileSync(
+    path.join(dir, "r7.html"),
+    `<body style="margin:0"><style>.new::after{content:"New"} .req::before{content:"* "} .ico::before{content:"\\\\e900";font-family:icomoon}</style>
+     <p class="new">Feature </p><label class="req">Email</label><span class="ico"></span>
+     <iframe srcdoc="<body style='margin:0'><h2 style='margin:0'>Inside frame</h2></body>" style="position:absolute;left:40px;top:200px;width:200px;height:80px;border:2px solid #000"></iframe></body>`,
+  );
+  const cap = await call(client, "capture", { source: { kind: "web", url: url("r7.html") }, savePath: "r7-capture" });
+  assert.ok(!cap.isError, text(cap));
+  const snap = JSON.parse(fs.readFileSync(path.join(dir, "r7-capture.json"), "utf8"));
+  assert.deepEqual(snap.elements.filter((e) => e.text).map((e) => e.text), ["Feature New", "* Email", "Inside frame"]);
+  const inner = snap.elements.find((e) => e.text === "Inside frame");
+  assert.deepEqual([inner.box.x, inner.box.y], [42, 202]);
+  assert.equal(snap.elements.find((e) => e.tag === "iframe").frame, "same-origin");
+});
