@@ -74,7 +74,7 @@ The v1.2.0 baseline is recorded before any change below.
 
 ### Mapping design ↔ code
 
-- **Components are derived from markers on component definitions in code.** For example, `data-pen="GmCFh"` on the root of `Button.tsx`, or `testID="pen:GmCFh"`. They are found by a string search of the repo. The search:
+- **Components are derived from markers on component definitions in code.** For example, `data-pen="GmCFh"` on the root of `Button.tsx`, or `testID="pen:GmCFh"`. A marker names a node in any of the forms verify already accepts (`src/verify/match.js`): a node id, a full address, an address suffix (`Header/Title`), or a unique layer name. Derivation and the `file:line` search resolve all four. They are found by a string search of the repo. The search:
   - respects `.gitignore`;
   - is cached by file mtimes;
   - is time-limited.
@@ -101,6 +101,7 @@ The v1.2.0 baseline is recorded before any change below.
   - Values shared by most nodes (font family, main text color) become a "defaults" line at the top.
   - An instance of a mapped component is one line: `Ô điểm neo → Button variant=primary (web/components/Button.tsx) · 358×44 · overrides: text "Đại học Bách Khoa"`.
   - Tokens show the code name and value: `fill --accent (#1A56DB)`.
+- **`detail: "full"` is today's outline unchanged**, so anything that relied on it keeps working.
 - **The limit cuts at section boundaries**, never mid-line. The output then lists the sections left out and the call that gets each one (`inspect { target: <section id> }`). `maxLines` stays.
 - **Image.** A labelled render ("Design: S1 · Bản đồ · 390 · sáng") comes before the outline the first time a frame is inspected in a session. First time means by id and .pen sha. `image: true|false` overrides this. Tall frames are cropped per section. Clients without image support get the text only.
 - **Variants.** When the target is a screen with several frames (widths × themes × states), the output is one base frame plus, per other frame, its differences:
