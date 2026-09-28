@@ -65,3 +65,17 @@ test("completeness: 100% on today's outline; a dropped fact is reported with its
   const noFill = lines.map((l) => l.replace(/color \$ink\S*/, ""));
   assert.equal(completeness({ lines: noFill, lineOf, nodes, defaults: "Defaults: color $ink" }).recall, 1);
 });
+
+test("completeness stays 100% on the compact outline (with its text defaults)", async () => {
+  const { textDefaults } = await import("../src/design/inspect.js");
+  const r = structuredClone(raw);
+  for (const n of r.nodes) if (n.fill === "$ink") n.resolved = { fill: "#EEEEEE" };
+  r.nodes.push(node("T2", "S", [16, 140, 120, 20], { type: "text", name: "Sub", content: "More", fontSize: 14, fill: "$ink", resolved: { fill: "#EEEEEE" } }));
+  const m = buildModel(r);
+  const defaults = textDefaults(m, { compact: true });
+  assert.ok(defaults?.color, "three texts share $ink");
+  const lineOf = new Map();
+  const lines = outline(m, { compact: true, defaults, onNode: (id, i) => lineOf.set(id, i) });
+  const res = completeness({ lines, lineOf, nodes: toJson(m).nodes, defaults: defaults.line });
+  assert.equal(res.recall, 1, JSON.stringify(res.missing));
+});

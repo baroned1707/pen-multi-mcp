@@ -225,3 +225,41 @@ test("a lone wrapper frame is unwrapped so its children are the sections", () =>
   const card = sections(screen("vertical", [node("c", "S", [0, 0, 390, 200], { type: "frame", name: "Card" }), node("c1", "c", [0, 0, 10, 10], { type: "text", name: "t", content: "x" })]));
   assert.deepEqual(card.sections.map((x) => x.node.name), ["Card"], "a single child is not unwrapped");
 });
+
+// Compact outline (inspect detail "normal"): one theme, defaults stated once, whole sections.
+const themed = () => {
+  const r = structuredClone(raw);
+  for (const n of r.nodes) {
+    if (n.fill === "$ink") n.resolved = { fill: "#EEEEEE", fontFamily: "Inter" };
+    if (n.type === "text") n.fontFamily = "$font";
+  }
+  r.variables.font = { type: "string", value: "Inter" };
+  return buildModel(r);
+};
+
+test("compact: values in the node's own theme only, and text defaults stated once", async () => {
+  const { textDefaults } = await import("../src/design/inspect.js");
+  const m = themed();
+  const d = textDefaults(m, { compact: true });
+  assert.equal(d.font, "$font(Inter)");
+  assert.equal(d.color, "$ink(#EEEEEE)");
+  const lines = outline(m, { compact: true, defaults: d });
+  const title = lines.find((l) => l.includes("Title ["));
+  assert.match(title, /"Today" 18 700 lh 22.5px$/, "font and color left to the defaults line");
+  assert.ok(!lines.some((l) => l.includes("#111111")), "the other theme's value is not shown");
+  assert.match(lines.find((l) => l.includes("Home icon")), /color \$ink\(#EEEEEE\)/);
+});
+
+test("compact: the line limit keeps whole sections and lists the rest with their calls", () => {
+  const m = themed();
+  const lines = outline(m, { compact: true, maxLines: 5, continueWith: (id) => `inspect(${id})` });
+  assert.match(lines[1], /^ {2}Header \[/);
+  assert.ok(!lines.some((l) => l.includes("Row [")), "the Content section does not fit and is not cut in the middle");
+  assert.match(lines.at(-1), /section\(s\) left out to stay under 5 lines; each one: Content → inspect\(B\) · Tab bar → inspect\(T\)/);
+});
+
+test("compact: a first section larger than the limit is shown cut, like the full outline", () => {
+  const m = themed();
+  const lines = outline(m, { compact: true, maxLines: 2, continueWith: (id) => `inspect(${id})` });
+  assert.match(lines.join("\n"), /output limit reached inside Header: inspect\(H\)/);
+});

@@ -39,8 +39,13 @@ function sizing(v) {
 }
 
 /** Every theme's value of a token, or the plain value. */
-function value(model, raw, resolved) {
+function value(model, raw, resolved, o) {
   if (raw === undefined || raw === null) return null;
+  // Compact: the value in this node's theme only (resolved), under the code's name when mapped.
+  if (o?.compact && model.isToken(raw)) {
+    const shown = resolved !== undefined && resolved !== null && typeof resolved !== "object" ? num(resolved) : (model.token(raw.slice(1))?.[0]?.value ?? "?");
+    return `${o.codeName?.(raw) ?? raw}(${shown})`;
+  }
   if (model.isToken(raw)) {
     const name = raw.slice(1);
     const vals = model.token(name);
@@ -53,10 +58,10 @@ function value(model, raw, resolved) {
 }
 
 /** A fill for display: the color with every theme's value, plus gradients, images and extra layers. */
-function paint(model, raw, resolved) {
+function paint(model, raw, resolved, o) {
   const p = primaryFill(raw, resolved);
   if (!p) return null;
-  const base = p.kind === "color" ? value(model, p.raw, p.resolved) : p.kind;
+  const base = p.kind === "color" ? value(model, p.raw, p.resolved, o) : p.kind;
   return p.extra ? `${base} + ${p.extra} more fill${p.extra > 1 ? "s" : ""}` : base;
 }
 
@@ -82,7 +87,12 @@ function effects(e) {
 }
 
 /** One outline line (without indentation). */
-export function describe(model, n) {
+/**
+ * One outline line (without indentation). `o.compact` shows values in the node's own theme only
+ * and leaves out what `o.defaults` ({ font, color }) already states once for the whole outline.
+ */
+export function describe(model, n, o) {
+  const at = (k, i) => (i === undefined ? n.resolved?.[k] : Array.isArray(n.resolved?.[k]) ? n.resolved[k][i] : undefined);
   const parts = [`${n.name ?? n.id} [${n.type}${n.component ? ` ← ${n.component.name}` : ""}]`];
   parts.push(`${num(n.abs.w)}×${num(n.abs.h)} @${num(n.abs.x)},${num(n.abs.y)}`);
   const w = sizing(n.width), h = sizing(n.height);
@@ -90,29 +100,31 @@ export function describe(model, n) {
   const lay = layoutOf(n);
   if (lay) {
     const bits = [lay === "vertical" ? "col" : lay === "horizontal" ? "row" : "absolute"];
-    if (n.gap !== undefined) bits.push(`gap ${value(model, n.gap, n.resolved?.gap)}`);
-    if (n.padding !== undefined) bits.push(`pad ${(Array.isArray(n.padding) ? n.padding : [n.padding]).map((v) => value(model, v)).join(" ")}`);
+    if (n.gap !== undefined) bits.push(`gap ${value(model, n.gap, n.resolved?.gap, o)}`);
+    if (n.padding !== undefined) bits.push(`pad ${(Array.isArray(n.padding) ? n.padding : [n.padding]).map((v, i) => value(model, v, Array.isArray(n.padding) ? at("padding", i) : at("padding"), o)).join(" ")}`);
     if (n.justifyContent) bits.push(`justify ${n.justifyContent}`);
     if (n.alignItems) bits.push(`align ${n.alignItems}`);
     if (n.clip) bits.push("clip");
     parts.push(bits.join(" "));
   }
   if (n.layoutPosition === "absolute") parts.push("absolute");
-  if (n.fill !== undefined && n.type !== "text" && n.type !== "icon") parts.push(`fill ${paint(model, n.fill, n.resolved?.fill)}`);
-  if (n.cornerRadius !== undefined) parts.push(`radius ${Array.isArray(n.cornerRadius) ? n.cornerRadius.map((r) => value(model, r)).join(" ") : value(model, n.cornerRadius)}`);
-  if (n.stroke !== undefined) parts.push(`stroke ${paint(model, n.stroke, n.resolved?.stroke)} ${strokeSides(n.resolved?.strokeWidth ?? n.strokeWidth)}`);
+  if (n.fill !== undefined && n.type !== "text" && n.type !== "icon") parts.push(`fill ${paint(model, n.fill, n.resolved?.fill, o)}`);
+  if (n.cornerRadius !== undefined) parts.push(`radius ${Array.isArray(n.cornerRadius) ? n.cornerRadius.map((r, i) => value(model, r, at("cornerRadius", i), o)).join(" ") : value(model, n.cornerRadius, at("cornerRadius"), o)}`);
+  if (n.stroke !== undefined) parts.push(`stroke ${paint(model, n.stroke, n.resolved?.stroke, o)} ${strokeSides(n.resolved?.strokeWidth ?? n.strokeWidth)}`);
   for (const e of effects(n.effect)) parts.push(e);
-  if (n.opacity !== undefined && n.opacity !== 1) parts.push(`opacity ${value(model, n.opacity)}`);
+  if (n.opacity !== undefined && n.opacity !== 1) parts.push(`opacity ${value(model, n.opacity, n.resolved?.opacity, o)}`);
   if (n.type === "text") {
     const size = n.resolved?.fontSize ?? n.fontSize;
     const lh = n.resolved?.lineHeight ?? n.lineHeight;
-    const weight = n.fontWeight !== undefined ? value(model, n.fontWeight, n.resolved?.fontWeight) : "";
-    const font = [value(model, n.fontFamily), value(model, n.fontSize), weight, typeof lh === "number" && typeof size === "number" ? `lh ${num(size * lh)}px` : ""].filter(Boolean).join(" ");
-    parts.push(`"${clip(n.resolved?.content ?? n.content)}" ${font}`);
-    if (n.fill !== undefined) parts.push(`color ${paint(model, n.fill, n.resolved?.fill)}`);
+    const weight = n.fontWeight !== undefined ? value(model, n.fontWeight, n.resolved?.fontWeight, o) : "";
+    const family = value(model, n.fontFamily, n.resolved?.fontFamily, o);
+    const font = [o?.defaults?.font && family === o.defaults.font ? "" : family, value(model, n.fontSize, n.resolved?.fontSize, o), weight, typeof lh === "number" && typeof size === "number" ? `lh ${num(size * lh)}px` : ""].filter(Boolean).join(" ");
+    parts.push(`"${clip(n.resolved?.content ?? n.content)}" ${font}`.trimEnd());
+    const color = n.fill !== undefined ? paint(model, n.fill, n.resolved?.fill, o) : null;
+    if (color && !(o?.defaults?.color && color === o.defaults.color)) parts.push(`color ${color}`);
     if (n.textGrowth) parts.push(`grow ${n.textGrowth}`);
   }
-  if (n.type === "icon") parts.push(`icon ${n.library ?? ""}:${n.icon ?? ""} color ${paint(model, n.fill, n.resolved?.fill) ?? "none"}`);
+  if (n.type === "icon") parts.push(`icon ${n.library ?? ""}:${n.icon ?? ""} color ${paint(model, n.fill, n.resolved?.fill, o) ?? "none"}`);
   if (n.component?.overrides?.length) parts.push(`overrides ${n.component.overrides.length}`);
   if (n.clipped) parts.push(`⚠ ${n.clipped} clipped`);
   return parts.join(" · ");
@@ -399,19 +411,55 @@ export function hint(model, n, parent, flavor) {
  * The outline of a model: one line per visible node, repeated siblings collapsed, cut at `depth`
  * and `maxLines` with the follow-up call that continues from where it stopped.
  */
-export function outline(model, { depth = 8, maxLines = 400, flavor, continueWith = (id) => id, onNode } = {}) {
+/**
+ * Values most text nodes share (font family, text color), stated once above a compact outline:
+ * { font, color, line } or null. Each needs >= 3 texts and at least half of them.
+ */
+export function textDefaults(model, o) {
+  const fams = new Map(), colors = new Map();
+  let texts = 0;
+  const bump = (m, k) => k && m.set(k, (m.get(k) ?? 0) + 1);
+  const walk = (n) => {
+    if (n.hidden) return;
+    if (n.type === "text") {
+      texts++;
+      bump(fams, value(model, n.fontFamily, n.resolved?.fontFamily, o));
+      bump(colors, n.fill !== undefined ? paint(model, n.fill, n.resolved?.fill, o) : null);
+    }
+    n.children.forEach(walk);
+  };
+  walk(model.root);
+  const top = (m) => {
+    const [k, c] = [...m].sort((x, y) => y[1] - x[1])[0] ?? [];
+    return k && c >= 3 && c >= texts / 2 ? k : null;
+  };
+  const font = top(fams), color = top(colors);
+  if (!font && !color) return null;
+  return { font, color, line: `Text defaults (left out of the lines below): ${[font && `font ${font}`, color && `color ${color}`].filter(Boolean).join(" · ")}` };
+}
+
+/**
+ * The outline, one line per node. Options:
+ * - compact: values in each node's own theme, text defaults stated once (pass `defaults` from
+ *   textDefaults), and the line limit cuts between the screen's top-level sections, listing
+ *   the ones left out with the call that shows each.
+ * - onNode(id, lineIndex): called for every node with the line it is described on.
+ */
+export function outline(model, { depth = 8, maxLines = 400, flavor, continueWith = (id) => id, onNode, compact = false, defaults = null, codeName } = {}) {
   const { addresses: addr } = addresses(model);
-  const lines = [];
+  const o = compact ? { compact, defaults, codeName } : undefined;
+  let lines = [];
   let truncatedAt = null;
+  let limit = maxLines;
   const push = (s) => {
-    if (lines.length >= maxLines) return false;
+    if (lines.length >= limit) return false;
     lines.push(s);
     return true;
   };
   const walk = (n, parent, level) => {
     if (truncatedAt) return;
     const pad = "  ".repeat(level);
-    if (!push(`${pad}${describe(model, n)}`)) return (truncatedAt = n.id);
+    if (!push(`${pad}${describe(model, n, o)}`)) return (truncatedAt = n.id);
     onNode?.(n.id, lines.length - 1);
     const h = hint(model, n, parent, flavor);
     if (h && !push(`${pad}  ${h}`)) return (truncatedAt = n.id);
@@ -433,8 +481,50 @@ export function outline(model, { depth = 8, maxLines = 400, flavor, continueWith
     }
     if (hiddenCount) push(`${pad}  (${hiddenCount} hidden)`);
   };
-  walk(model.root, null, 0);
-  if (truncatedAt) lines.push(`… output limit reached at ${addr.get(truncatedAt) ?? truncatedAt}: ${continueWith(truncatedAt)}`);
+
+  if (!compact) {
+    walk(model.root, null, 0);
+    if (truncatedAt) lines.push(`… output limit reached at ${addr.get(truncatedAt) ?? truncatedAt}: ${continueWith(truncatedAt)}`);
+  } else {
+    // Whole top-level sections only: each is rendered alone and kept if it fits.
+    const root = model.root;
+    push(describe(model, root, o));
+    onNode?.(root.id, 0);
+    const left = [];
+    const groups = collapse(visibleChildren(root));
+    for (const g of groups) {
+      const before = lines, seen = [];
+      lines = [];
+      limit = Infinity;
+      const record = onNode;
+      onNode = (id, i) => seen.push([id, i]);
+      walk(g.node, root, 1);
+      if (g.count > 1) lines.push(`  ×${g.count - 1} more like ${g.node.name ?? g.node.type}`);
+      onNode = record;
+      const part = lines;
+      lines = before;
+      limit = maxLines;
+      if (left.length || lines.length + part.length > maxLines) {
+        // The first section alone over the limit: show it cut, as the full outline would.
+        if (!left.length && lines.length === 1 && part.length) {
+          const room = maxLines - lines.length;
+          for (const [id, i] of seen) if (i < room) onNode?.(id, lines.length + i);
+          lines.push(...part.slice(0, room), `… output limit reached inside ${g.node.name ?? g.node.id}: ${continueWith(g.node.id)}`);
+          continue;
+        }
+        left.push(g.node);
+        continue;
+      }
+      for (const [id, i] of seen) onNode?.(id, lines.length + i);
+      lines.push(...part);
+    }
+    const hidden = root.children.length - visibleChildren(root).length;
+    if (hidden) lines.push(`  (${hidden} hidden)`);
+    const skippedSections = left;
+    if (skippedSections.length) {
+      lines.push(`… ${skippedSections.length} section(s) left out to stay under ${maxLines} lines; each one: ${skippedSections.map((n) => `${n.name ?? n.type} → ${continueWith(n.id)}`).join(" · ")}`);
+    }
+  }
   if (model.skipped) lines.push(`… ${model.skipped} nodes past the read limit were not read: inspect a child node instead.`);
   return lines;
 }

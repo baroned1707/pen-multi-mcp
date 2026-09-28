@@ -83,7 +83,12 @@ test("overview focus lists frame ids; inspect by name resolves and reports every
   assert.match(t, /1\. List \(\w+\) — "Alpha" "Beta" "Gamma" "Delta"/);
   assert.match(t, /2\. Primary \(\w+\) — <C\/Dot> "Pay now"/, "instance content with its override");
   assert.match(t, /×3 more like Row \(content: "Beta", "Gamma", "Delta"\)/);
-  assert.match(t, /Title \[text\] .*"Checkout" Inter 18 700 lh 22.5px · color \$ink\(#111111 light, #EEEEEE dark\)/);
+  // detail "normal" (default): this frame's theme only; shared font and text color stated once.
+  assert.match(t, /Text defaults \(left out of the lines below\): font Inter · color \$ink\(#111111\)/);
+  assert.match(t, /Title \[text\] .*"Checkout" 18 700 lh 22\.5px\n/);
+  assert.doesNotMatch(t, /#EEEEEE/, "the dark value is not shown for a light frame");
+  const full = text(await call(client, "inspect", { filePath: file, target: "Checkout · light", detail: "full" }));
+  assert.match(full, /Title \[text\] .*"Checkout" Inter 18 700 lh 22.5px · color \$ink\(#111111 light, #EEEEEE dark\)/, "full keeps today's outline");
   assert.match(t, /Primary \[frame ← C\/Button\]/);
   assert.match(t, /Too tall .*⚠ partially clipped/);
   assert.match(t, /tw: .*border-b-\[1px\]/);

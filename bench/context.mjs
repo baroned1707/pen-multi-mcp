@@ -42,7 +42,7 @@ try {
       const res = await call(c, "inspect", { filePath: file, target: id });
       if (res.isError) continue;
       const t = text(res);
-      const outline = t.split("\n## Outline\n")[1]?.split("\n") ?? [];
+      const outline = t.split(/\n## Outline[^\n]*\n/)[1]?.split("\n") ?? [];
       screens.push({ id, tokens: approxTokens(t), lines: outline.length, redundancy: +redundancy(outline).toFixed(3) });
     }
     const avg = (k) => (screens.length ? +(screens.reduce((s, x) => s + x[k], 0) / screens.length).toFixed(3) : null);

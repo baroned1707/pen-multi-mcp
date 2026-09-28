@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { buildModel } from "./model.js";
-import { outline, sectionLines, sections, toJson } from "./inspect.js";
+import { outline, sectionLines, sections, textDefaults, toJson } from "./inspect.js";
 import { analyze, renderOverview } from "./overview.js";
 import { ReadError, readOverview, readSubtree } from "./read.js";
 
@@ -169,9 +169,10 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
       maxLines: z.number().int().min(20).max(3000).optional().describe("Outline line limit (default 400)."),
       flavor: z.enum(["tailwind", "css", "react-native"]).optional().describe("Add per-node code hints in this flavor."),
       format: z.enum(["outline", "json", "html-ref"]).optional().describe("outline (default), json, or html-ref."),
+      detail: z.enum(["summary", "normal", "full"]).optional().describe('outline detail: "normal" (default) shows values in the frame\'s own theme, states shared text defaults once and keeps whole sections under maxLines; "full" also lists every theme\'s value on every line; "summary" gives only the sections.'),
       savePath: z.string().optional().describe("Write the JSON spec here (relative to the agent's working directory), e.g. design-spec/home.json."),
     },
-    async ({ filePath: f, target: wanted, depth = 8, maxLines = 400, flavor, format = "outline", savePath }) => {
+    async ({ filePath: f, target: wanted, depth = 8, maxLines = 400, flavor, format = "outline", detail = "normal", savePath }) => {
       const target = await route(f);
       const resolved = await resolveTarget(target, wanted);
       const { id, frame, analysis } = resolved;
@@ -267,9 +268,16 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
         `## Sections in order${sec.scroll ? ` (scroll container "${sec.scroll.name ?? sec.scroll.type}"; "fixed" sections sit outside it and do not scroll)` : ""}${sec.wrapper ? ` (inside wrapper "${sec.wrapper.name ?? sec.wrapper.type}")` : ""}`,
         ...sectionLines(sec, { max: Math.max(40, Math.floor(maxLines / 10)) }),
         "",
-        "## Outline",
-        ...outline(model, { depth, maxLines, flavor, continueWith: (nodeId) => `inspect({ filePath: ${JSON.stringify(target.file)}, target: ${JSON.stringify(nodeId)} })` }),
       ];
+      const more = (nodeId) => `inspect({ filePath: ${JSON.stringify(target.file)}, target: ${JSON.stringify(nodeId)} })`;
+      if (detail === "summary") {
+        lines.push("", `Outline left out (detail "summary"): inspect with detail "normal", or one section by its id.`);
+      } else if (detail === "full") {
+        lines.push("", "## Outline", ...outline(model, { depth, maxLines, flavor, continueWith: more }));
+      } else {
+        const defaults = textDefaults(model, { compact: true });
+        lines.push("", `## Outline (values in this frame's theme${defaults ? "; text defaults below" : ""}; detail "full" lists every theme)`, ...(defaults ? [defaults.line] : []), ...outline(model, { depth, maxLines, flavor, continueWith: more, compact: true, defaults }));
+      }
       return wrap(target, [...notes, ...lines]);
     },
   );
