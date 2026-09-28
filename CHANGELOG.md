@@ -1,8 +1,15 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 — 2026-09-28
 
-- Context metrics (`src/metrics/context.js`): size, repeated facts and completeness of what inspect gives agents. `npm run bench:context` measures real files against any checkout (`PEN_MULTI_SERVER`); the v1.2.0 baseline is in `bench/results/` (inspect: 2.4–3.9k tokens per screen, 29–42% of facts repeated). `npm run eval` runs real agents on three fixture tasks (port, design update, fix) and is a dry run unless `--run`.
+Context that lets agents port correctly, in both directions (spec: `docs/superpowers/specs/2026-09-28-agent-context-design.md`).
+
+- **Measure first.** `src/metrics/context.js` measures what inspect gives agents (size, repeated facts, completeness of the facts needed per node — 100% is a test). `npm run bench:context` measures real files against any checkout (`PEN_MULTI_SERVER`); `npm run eval` runs real agents on three fixture tasks and is a dry run unless `--run`. Results in `bench/results/`.
+- **inspect**: `detail` normal (default: own theme only, text defaults once, whole sections under the limit), full (the previous outline), summary. Code mapping: instances of components marked in code are one line naming the code component and `file:line`; tokens under their code names from `.pen-multi.json` `tokens.file`; what is not mapped is listed. A screen with several frames: one in full, the others as differences (themes that differ only through tokens are one line; raw values in a theme variant are flagged). Components get their API (slots, overrides in use, family, code). A labelled render the first time a node is inspected.
+- **verify**: findings end with `→ file:line` from markers and name the design token and its code name; the verdict says what was not checked; the worst findings come as close-ups. `direction: "code-to-design"` proposes execute operations for findings with a clear cause (hide, never delete), and warns when the design was also edited.
+- **import_ui**: number tokens for font sizes and radii; marked elements as component instances with text overrides; auto layout from flexbox and even column stacks, kept only where the engine reproduces the page within 2 px; one-line texts no longer wrap from font metric differences; reports raw values and repeated structures that look like components.
+- **overview** flags screens that look like states the names do not mark, and cells with two frames of one theme, with how to name them.
+- Measured (inspect, same 8 screens per file, text tokens): near-me 3.9k → 3.6k (−8%), driversafe 2.8k → 2.6k (−10%) per screen, now including the code mapping section. A screen drawn 20 times (S1 of near-me: widths × themes × states) took 20 inspect calls (~78k tokens); it is now one call of ~3.7k.
 
 ## 1.2.0 — 2026-09-28
 
