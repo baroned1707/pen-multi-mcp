@@ -75,6 +75,7 @@ Requirements: Node 20+, a logged-in `@pen.dev/cli` (bundled), and for `verify` /
 |---|---|
 | `read_skill`, `get_style` | Same as the official server (cached; no design file needed) |
 | `overview`, `inspect` | Design context: the whole document, and one screen as data (see below) |
+| `port` | Durable screen-by-screen port queue: plan, next (claims for parallel agents), done only on MATCH, status |
 | `import_ui`, `sync_status` | Code → design: rebuild a running screen as a frame; which screens are verified, stale or never checked |
 | `lint`, `tokens` | Design-file quality checks with safe fixes; design tokens as CSS / Tailwind / JSON / React Native, diffed against code |
 | `verify`, `capture`, `contact_sheet` | Check the running implementation against the design on web, React Native, native Android/iOS or a screenshot (see below) |
@@ -141,6 +142,20 @@ The browser is Playwright's Chromium if installed (`npx playwright install chrom
 `sync_status` lists every screen × width × theme with its route, its last `verify` verdict and age, and whether the design changed since (stale), then the `verify` calls to run next.
 
 Routes live in `.pen-multi.json` next to the `.pen`: `{ "baseUrl": "http://localhost:5173", "routes": { "Checkout": "/checkout" } }`. With them, `verify({ target: "Checkout", source: { kind: "web" } })` needs no URL.
+
+## Porting many screens: `port` and the `pen-port` skill
+
+`port` keeps a durable queue per .pen (`design-verify/port-*.json`): `plan` lists every frame (screen × state × width × theme) with its route and state setup; `next` claims one (pass `claim` per agent when several work in parallel) and returns its page, state, last findings and the loop; `done` succeeds only when that frame's latest `verify` is MATCH for the current design; `skip` / `block` record why; `status` shows progress. `verify` records every run on the queue.
+
+States are put on screen with `source.mocks` (fixture answers for matching requests: `json`, `body`, `file`, `status`, `delayMs`) and `steps`, or declared once in `.pen-multi.json`:
+
+```json
+{ "baseUrl": "http://localhost:5173",
+  "routes": { "Home": "/" },
+  "states": { "Home — empty": { "route": "/", "mocks": [{ "url": "**/api/today*", "json": [] }] } } }
+```
+
+The Claude Code skill `skills/pen-port` (copy it to `~/.claude/skills/pen-port`) drives the loop, with up to three subagents for large ports.
 
 ## Design quality: `lint` and `tokens`
 

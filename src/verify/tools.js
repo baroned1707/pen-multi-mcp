@@ -37,10 +37,47 @@ function isSnapshotFile(file) {
 }
 
 const describeSource = (src) =>
-  src.kind === "web" ? `web ${src.url}` : src.kind === "image" ? `image ${src.path}` : `${src.kind} ${src.platform}${src.device ? ` ${src.device}` : ""}${src.deepLink ? ` ${src.deepLink}` : ""}`;
+  (src.kind === "web" ? `web ${src.url}` : src.kind === "image" ? `image ${src.path}` : `${src.kind} ${src.platform}${src.device ? ` ${src.device}` : ""}${src.deepLink ? ` ${src.deepLink}` : ""}`) +
+  (src.state ? ` (state "${src.state}" from .pen-multi.json${src.kind === "web" ? "" : ", its deepLink only"})` : "") +
+  (src.mocks?.length ? ` with ${src.mocks.length} mock${src.mocks.length > 1 ? "s" : ""}` : "");
 
-export function registerVerifyTools({ tool, z, route, design, withMachineLock, optionalFilePath, ok, conventions, saver }) {
+export function registerVerifyTools({ tool, z, route, design, withMachineLock, optionalFilePath, ok, conventions, saver, hooks = {} }) {
   // The page a screen is served at: .pen-multi.json { baseUrl, routes: { "<screen name, code or frame name>": "/path" } }.
+  /**
+   * .pen-multi.json `states`: how to show a frame's state ({ route?, steps?, mocks?, deepLink? }),
+   * keyed by frame name, "Screen — state", screen or code. Its steps run before the call's; its
+   * mocks apply unless the call mocks the same url; its route/deepLink fill in what is missing.
+   */
+  function stateFor(target, wanted, frame) {
+    const states = conventions(target.file).states ?? {};
+    const row = frame?.row;
+    // A state frame ("Home — empty") never falls back to its screen's entry: that is another state.
+    const keys = row?.state
+      ? [frame?.name, `${row.screen} — ${row.state}`, wanted !== row.screen && wanted !== row.code ? wanted : null]
+      : [frame?.name, wanted, row?.code, row?.screen];
+    const key = keys.filter(Boolean).find((k) => states[k]);
+    return key ? { key, ...states[key] } : null;
+  }
+  function withState(target, wanted, frame, src) {
+    const st = stateFor(target, wanted, frame);
+    if (!st) return src;
+    const out = { ...src };
+    if (out.kind === "web") {
+      if (!out.url && st.route) out.url = /^[a-z]+:/i.test(st.route) ? st.route : routeJoin(conventions(target.file).baseUrl, st.route);
+      out.steps = [...(st.steps ?? []), ...(src.steps ?? [])];
+      // The call's mocks win over the state's for the same url and method.
+      const key = (m) => `${m.method?.toUpperCase() ?? "*"} ${m.url}`;
+      const own = new Set((src.mocks ?? []).map(key));
+      out.mocks = [...(src.mocks ?? []), ...(st.mocks ?? []).filter((m) => !own.has(key(m)) && !own.has(`* ${m.url}`))];
+    } else if (!out.deepLink && st.deepLink) out.deepLink = st.deepLink;
+    out.state = st.key;
+    return out;
+  }
+  const routeJoin = (base, route) => {
+    if (!base) throw new ReadError(`.pen-multi.json state route "${route}" needs a baseUrl.`);
+    return `${base.replace(/\/+$/, "")}/${route.replace(/^\/+/, "")}`;
+  };
+
   function routeUrl(target, wanted, frame) {
     const conv = conventions(target.file);
     const keys = [...new Set([frame?.name, wanted, frame?.row?.screen, frame?.row?.code].filter(Boolean))];
@@ -57,6 +94,21 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       url: z.string().optional().describe("web: the page to load (the agent starts the dev server). verify can omit it when .pen-multi.json maps the screen to a route."),
       steps: z.array(z.record(z.string(), z.any())).optional().describe('web: actions before capturing, e.g. [{ "click": "text=Login" }, { "fill": ["#email", "a@b.c"] }, { "waitFor": ".list" }, { "wait": 500 }, { "press": "Enter" }, { "eval": "..." }].'),
       fullPage: z.boolean().optional().describe("web: capture the whole scrolling page (default true)."),
+      mocks: z
+        .array(
+          z.object({
+            url: z.string().describe('Glob ("**/api/today*") or "/regex/flags".'),
+            method: z.string().optional(),
+            status: z.number().int().optional(),
+            json: z.any().optional().describe("Response body as JSON."),
+            body: z.string().optional(),
+            file: z.string().optional().describe("Response body from a file (relative to the working directory)."),
+            headers: z.record(z.string(), z.string()).optional(),
+            delayMs: z.number().int().min(0).max(60000).optional().describe("Delay the answer (loading states)."),
+          }),
+        )
+        .optional()
+        .describe("web: answer matching requests with fixtures, to put the page into a state (empty, error, loading) without a backend."),
       platform: z.enum(["ios", "android"]).optional().describe("probe/native: the device platform."),
       device: z.string().optional().describe("probe/native: simulator UDID / adb serial (default: the booted one)."),
       deepLink: z.string().optional().describe("probe/native: open this URL in the app first."),
@@ -83,7 +135,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
     let snapshot;
     if (src.kind === "web") {
       if (!src.url) throw new ReadError("source.url is required for kind web");
-      ({ snapshot } = await captureWeb({ url: src.url, steps: src.steps, fullPage: src.fullPage !== false, width, height, colorScheme, screenshotPath }));
+      ({ snapshot } = await captureWeb({ url: src.url, steps: src.steps, mocks: src.mocks ?? [], fullPage: src.fullPage !== false, width, height, colorScheme, screenshotPath }));
     } else if (src.kind === "probe") {
       ({ snapshot } = await withMachineLock("pen-probe", () => captureProbe({ ...src, screenshotPath })));
     } else if (src.kind === "native") {
@@ -184,12 +236,14 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       const target = await route(f);
       const run = design.reader(target);
       const { id, frame: picked, theme: frameTheme } = await pickFrame(target, wanted, { width, theme });
+      if (src) src = withState(target, wanted, picked, src);
       if (src?.kind === "web" && !src.url) src = { ...src, url: routeUrl(target, wanted, picked) };
       const model = buildModel(await readSubtree(run, id));
       const rootTheme = model.root.theme && typeof model.root.theme === "object" ? Object.values(model.root.theme)[0] : undefined;
       const d = designNodes(model);
       // The .pen's hash keeps forks of the same screen (verified by two agents at once) apart.
-      const fileTag = createHash("sha1").update(target.file).digest("hex").slice(0, 6);
+      // With the id: two frames with the same name (e.g. one per width) keep their own reports.
+      const fileTag = createHash("sha1").update(`${target.file}\n${id}`).digest("hex").slice(0, 6);
       const name = slug([model.root.name ?? id, width, theme, fileTag].filter(Boolean).join("-"));
       const outBase = path.join(process.cwd(), OUT_DIR, name);
       // Per .pen file: forks share node ids, and two agents may verify both at once.
@@ -239,6 +293,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
           1,
         ),
       );
+      await hooks.onVerify?.(target.file, id, { summary: result.summary }, files.report);
       return design.wrap(target, renderReport({ meta, ...result, files, maxLines }));
     },
   );
@@ -276,5 +331,5 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       return res;
     },
   );
-  return { capture, source };
+  return { capture, source, stateFor };
 }

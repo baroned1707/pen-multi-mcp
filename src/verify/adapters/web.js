@@ -1,5 +1,8 @@
 // Web adapter: loads a URL in headless Chromium (never a visible window) and records every visible
 // element's box, own text, computed colors, typography, radius, border and data-pen marker.
+import fs from "node:fs";
+import path from "node:path";
+
 let playwright;
 async function launch() {
   playwright ??= await import("playwright-core");
@@ -416,11 +419,56 @@ async function runStep(page, step) {
 export const WEB_FIELDS = ["text", "bg", "fg", "fontSize", "fontWeight", "lineHeight", "radius", "border"];
 
 /** Captures `url` at `width`×`height` into { snapshot, screenshotPath }. */
-export async function captureWeb({ url, steps = [], fullPage = true, width, height, colorScheme, screenshotPath, limit = 6000 }) {
+/**
+ * Answers matching requests in the browser instead of the network: { url (glob or "/regex/flags"),
+ * method?, status?, json? | body? | file?, headers?, delayMs? }. Puts the page into a state
+ * (empty list, error, loading) without a backend or code changes.
+ */
+const MOCK_TYPES = { ".json": "application/json", ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml", ".txt": "text/plain" };
+
+/** A mock's url: "/regex/flags" (without a "**" glob in it) is a RegExp, anything else a glob. */
+export function mockPattern(url) {
+  const re = /^\/(.+)\/([a-z]*)$/.exec(url ?? "");
+  if (!re || re[1].includes("**")) return url;
+  return new RegExp(re[1], re[2].replace(/[gy]/g, "")); // g/y make test() stateful across requests
+}
+
+async function installMocks(context, mocks, cwd) {
+  // Playwright tries the last registered route first; register in reverse so the first mock wins.
+  for (const m of [...mocks].reverse()) {
+    const pattern = mockPattern(m.url);
+    if (!pattern) throw new Error(`a mock needs a url: ${JSON.stringify(m)}`);
+    let body = m.body;
+    let contentType = m.contentType;
+    if (m.json !== undefined) {
+      body = JSON.stringify(m.json);
+      contentType ??= "application/json";
+    }
+    if (m.file) {
+      body = fs.readFileSync(path.resolve(cwd, m.file));
+      contentType ??= MOCK_TYPES[path.extname(m.file).toLowerCase()];
+    }
+    await context.route(pattern, async (route) => {
+      const req = route.request();
+      if (m.method && req.method().toUpperCase() !== m.method.toUpperCase()) return route.fallback();
+      if (m.delayMs) await new Promise((r) => setTimeout(r, Math.min(m.delayMs, 60_000)));
+      // Echo the origin so credentialed requests (cookies, auth) accept the mocked answer too.
+      const origin = (await req.headerValue("origin").catch(() => null)) ?? "*";
+      const cors = origin === "*" ? { "access-control-allow-origin": "*" } : { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", vary: "Origin" };
+      if (req.method() === "OPTIONS" && !m.method) {
+        return route.fulfill({ status: 204, headers: { ...cors, "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS", "access-control-allow-headers": (await req.headerValue("access-control-request-headers").catch(() => null)) ?? "*" } });
+      }
+      await route.fulfill({ status: m.status ?? 200, headers: { ...cors, ...(m.headers ?? {}) }, contentType, body: body ?? "" });
+    });
+  }
+}
+
+export async function captureWeb({ url, steps = [], mocks = [], fullPage = true, width, height, colorScheme, screenshotPath, limit = 6000 }) {
   if (!/^(https?|file):/i.test(url ?? "")) throw new Error(`source.url must be an http(s) or file URL: ${url}`);
   const browser = await launch();
   try {
     const context = await browser.newContext({ viewport: { width: Math.round(width), height: Math.round(height) }, deviceScaleFactor: 1, colorScheme: colorScheme ?? "no-preference" });
+    if (mocks.length) await installMocks(context, mocks, process.cwd());
     const page = await context.newPage();
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));

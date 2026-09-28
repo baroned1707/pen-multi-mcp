@@ -59,3 +59,19 @@ test("concurrent calls on one file run one at a time, in order", async () => {
   assert.match(text(results[1]), /ECHO .*second/);
   assert.match(text(results[2]), /ECHO .*third/);
 });
+
+test("withMachineLock excludes callers in the same process too, in order", async () => {
+  process.env.PEN_MULTI_HOME = path.join(root, "lock-home"); // before the module reads its config
+  const { withMachineLock } = await import("../src/pool.js");
+  let inside = 0, max = 0;
+  const order = [];
+  await Promise.all([1, 2, 3, 4].map((n) => withMachineLock("test:same-process", async () => {
+    inside++;
+    max = Math.max(max, inside);
+    await new Promise((r) => setTimeout(r, 20));
+    order.push(n);
+    inside--;
+  })));
+  assert.equal(max, 1);
+  assert.deepEqual(order, [1, 2, 3, 4]);
+});
