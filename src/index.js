@@ -18,6 +18,7 @@ import { current as currentCall, recentSlow, recordIfSlow, withCall } from "./ca
 import { registerVerifyTools } from "./verify/tools.js";
 import { registerLintTools } from "./lint/tools.js";
 import { registerImportTools } from "./import/tools.js";
+import { registerPortTools } from "./port/tools.js";
 import { conventions } from "./design/tools.js";
 import { cliVersion } from "./shell.js";
 import { registerDesignTools } from "./design/tools.js";
@@ -55,6 +56,7 @@ Implementing or refactoring UI from a design (port mode):
 - Never port from screenshots or from memory: read the design as data with inspect. Screenshots are for a human sanity check, not for measurements.
 - While implementing, mark elements with the layer address inspect prints: data-pen="Header/Title" on web, testID="pen:Header/Title" in React Native (add probe/react-native/PenProbe.js to the app root once).
 - Screens built in code first: import_ui brings them into the design as a frame to refine. sync_status shows which screens were verified against the code, which are stale, and which never were; routes in .pen-multi.json let verify find each screen's page.
+- Porting many screens: use the port tool. port plan once; then repeat port next → inspect → implement → verify → fix until MATCH → port done, and do not stop while port next still hands out work (block an item with its reason after its attempts run out, then continue). Put the app into a screen's state with verify's source.mocks / steps, or a states entry in .pen-multi.json. Parallel subagents each pass their own claim name to port next.
 - A port is done only when verify reports MATCH for every implemented screen × width × theme: run it against the running app (web URL, pen-probe, native device, or a screenshot), fix the high findings first (missing, extra, order), then the rest, and re-run. Do not report a screen as done from a screenshot.
 
 Many agents and projects:
@@ -63,7 +65,7 @@ Many agents and projects:
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "1.1.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "1.2.0" }, { instructions: INSTRUCTIONS });
 
 const filePath = z
   .string()
@@ -590,8 +592,11 @@ tool(
 );
 
 designTools = registerDesignTools({ tool, z, route, app, pool, saver, timings, ok, fail, fromApp, textOf, optionalFilePath });
-const verifyTools = registerVerifyTools({ tool, z, route, design: designTools, withMachineLock, optionalFilePath, ok, conventions, saver });
+const verifyHooks = {};
+const verifyTools = registerVerifyTools({ tool, z, route, design: designTools, withMachineLock, optionalFilePath, ok, conventions, saver, hooks: verifyHooks });
 registerLintTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath });
+const portTools = registerPortTools({ tool, z, route, design: designTools, optionalFilePath, conventions, withMachineLock, saver, stateFor: verifyTools.stateFor });
+verifyHooks.onVerify = portTools.onVerify;
 registerImportTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath, capture: verifyTools.capture, source: verifyTools.source, conventions, saver });
 
 let shuttingDown = false;

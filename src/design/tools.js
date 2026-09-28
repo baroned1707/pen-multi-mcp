@@ -23,7 +23,7 @@ export function conventions(file) {
     const doc = JSON.parse(fs.readFileSync(path.resolve(path.dirname(p), f), "utf8"));
     flowEdges.push(...(doc.edges ?? []));
   }
-  return { screenPattern: conf.screenPattern, flowEdges, baseUrl: conf.baseUrl, routes: conf.routes ?? {} };
+  return { screenPattern: conf.screenPattern, flowEdges, baseUrl: conf.baseUrl, routes: conf.routes ?? {}, states: conf.states ?? {} };
 }
 
 const fileHash = (file) => (fs.existsSync(file) ? createHash("sha1").update(fs.readFileSync(file)).digest("hex") : null);

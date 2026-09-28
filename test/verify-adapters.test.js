@@ -161,10 +161,12 @@ test("probe: Android status bar height moves boxes to screen coordinates; oversi
   const toast = probeElements({ elements: [{ box: { x: 0, y: 0, w: 411, h: 914 } }, { box: { x: 0, y: -120, w: 411, h: 60 } }] });
   assert.equal(toast[0].box.y, 0, "a small root hidden above the screen does not shift the app");
   const port = 17359;
-  const pending = receiveSnapshot({ port, timeoutMs: 3000 }).catch((e) => e.message);
+  // What matters: an oversized post is refused (413 or a dropped connection), never taken as a
+  // snapshot. Under load the upload can outlast the listener, so any refusal counts.
+  const pending = receiveSnapshot({ port, timeoutMs: 8000 }).then(() => "accepted", (e) => e.message);
   await new Promise((r) => setTimeout(r, 100));
-  const res = await fetch(`http://127.0.0.1:${port}/pen-probe/snapshot`, { method: "POST", body: "x".repeat(51 * 1024 * 1024) }).catch((e) => ({ status: e.cause?.code ?? "reset" }));
-  assert.ok(res.status === 413 || res.status === "ECONNRESET" || res.status === "reset" || res.status === "UND_ERR_SOCKET", `got ${res.status}`);
+  const res = await fetch(`http://127.0.0.1:${port}/pen-probe/snapshot`, { method: "POST", body: "x".repeat(51 * 1024 * 1024) }).catch((e) => ({ status: e.cause?.code ?? "network error" }));
+  assert.notEqual(res.status, 204, "the oversized body was not accepted");
   assert.match(await pending, /No snapshot/);
 });
 

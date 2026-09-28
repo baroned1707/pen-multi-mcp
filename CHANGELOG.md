@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0 — 2026-09-28
+
+- `port`: a durable queue for porting a design screen by screen until MATCH (plan / next with claims for parallel agents / done only on a fresh MATCH / skip / block / status); verify records each run on it.
+- `verify` / `capture` web sources take `mocks` (fixture answers for matching requests, with status, delay and files) to show a screen's state without a backend; `.pen-multi.json` `states` declare route, steps, mocks and deep link per screen state.
+- `skills/pen-port`: a Claude Code skill that drives the loop, with subagents for large ports.
+
 ## 1.1.0 — 2026-09-28
 
 - Slow-call diagnostics: calls over 3 s are logged machine-wide (`~/.pen-multi/slow.jsonl`) with their time per step and whether other agents were using the pen.dev app; `list_sessions` shows them with a likely cause; a call that waited behind other agents' app calls says so. Measured on the app: screenshots and exports take 0.35–0.8 s whether Pen is in front, behind another app or hidden, so earlier 17–60 s screenshots came from something else — this log is there to catch it next time.
