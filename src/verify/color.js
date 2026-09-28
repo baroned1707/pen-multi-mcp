@@ -19,6 +19,8 @@ export function parseColor(input) {
     const n = (i) => parseInt(h.slice(i, i + 2), 16);
     return { r: n(0), g: n(2), b: n(4), a: h.length === 8 ? n(6) / 255 : 1 };
   }
+  const fn = /^(hsla?|oklch|oklab)\(([^)]+)\)$/.exec(s);
+  if (fn) return fromFunction(fn[1], fn[2]);
   m = /^rgba?\(([^)]+)\)$/.exec(s);
   if (m) {
     const parts = m[1].split(/[\s,/]+/).filter(Boolean);
@@ -62,4 +64,44 @@ export function deltaE(a, b) {
   const [l1, a1, b1] = toLab(flatten(a));
   const [l2, a2, b2] = toLab(flatten(b));
   return Math.hypot(l1 - l2, a1 - a2, b1 - b2);
+}
+
+const num = (p, scale = 1) => (p.endsWith("%") ? (parseFloat(p) / 100) * scale : parseFloat(p));
+const alphaOf = (p) => (p === undefined ? 1 : p.endsWith("%") ? parseFloat(p) / 100 : parseFloat(p));
+const angle = (p) => {
+  const v = parseFloat(p);
+  if (p.endsWith("turn")) return v * 360;
+  if (p.endsWith("rad")) return (v * 180) / Math.PI;
+  if (p.endsWith("grad")) return v * 0.9;
+  return v;
+};
+const toByte = (v) => Math.max(0, Math.min(255, Math.round(v * 255)));
+const gamma = (v) => (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055);
+
+/** hsl(), oklch() and oklab() in sRGB (out-of-gamut values clipped). */
+function fromFunction(kind, body) {
+  const parts = body.replace(/,/g, " ").split(/[\s/]+/).filter(Boolean);
+  if (parts.length < 3 || parts.some((p) => p === "none")) return null;
+  const a = alphaOf(parts[3]);
+  if (kind.startsWith("hsl")) {
+    const h = ((angle(parts[0]) % 360) + 360) % 360, sat = num(parts[1], 1) / (parts[1].endsWith("%") ? 1 : 100), l = num(parts[2], 1) / (parts[2].endsWith("%") ? 1 : 100);
+    const k = (n) => (n + h / 30) % 12;
+    const f = (n) => l - sat * Math.min(l, 1 - l) * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+    return { r: toByte(f(0)), g: toByte(f(8)), b: toByte(f(4)), a };
+  }
+  let L = num(parts[0], 1), A, B;
+  if (kind === "oklch") {
+    const C = num(parts[1], 0.4), H = (angle(parts[2]) * Math.PI) / 180;
+    A = C * Math.cos(H);
+    B = C * Math.sin(H);
+  } else {
+    A = num(parts[1], 0.4);
+    B = num(parts[2], 0.4);
+  }
+  const l_ = L + 0.3963377774 * A + 0.2158037573 * B, m_ = L - 0.1055613458 * A - 0.0638541728 * B, s_ = L - 0.0894841775 * A - 1.291485548 * B;
+  const [l3, m3, s3] = [l_ ** 3, m_ ** 3, s_ ** 3];
+  const r = 4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
+  const g = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
+  const b = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.707614701 * s3;
+  return { r: toByte(gamma(r)), g: toByte(gamma(g)), b: toByte(gamma(b)), a };
 }

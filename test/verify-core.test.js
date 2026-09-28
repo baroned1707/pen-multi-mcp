@@ -420,3 +420,12 @@ test("icon glyphs mixed into text are dropped from it", async () => {
   assert.equal(withoutGlyphs("\uF101 Home"), "Home");
   assert.deepEqual(parseUiautomator(`<hierarchy><node text="&#61697; Home" bounds="[0,0][96,48]" /></hierarchy>`).map((e) => e.text), ["Home"]);
 });
+
+test("modern CSS colors: oklch (Tailwind v4), oklab and hsl are understood", () => {
+  assert.equal(toHex(parseColor("oklch(62.3% 0.214 259.815)")), "#2B7FFF");
+  assert.equal(toHex(parseColor("oklch(0.985 0.003 85)")), "#FBFAF8");
+  assert.equal(toHex(parseColor("oklab(0.628 0.225 0.126)")), "#FF0000");
+  assert.equal(toHex(parseColor("hsl(0, 100%, 50%)")), "#FF0000");
+  assert.equal(toHex(parseColor("hsl(217 91% 60% / 50%)")), "#3C83F680");
+  assert.equal(parseColor("oklch(none 0 0)"), null);
+});

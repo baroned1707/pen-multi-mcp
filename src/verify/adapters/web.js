@@ -146,6 +146,21 @@ function collect(limit) {
     const t = range.getBoundingClientRect();
     return t.width > 0 && t.height > 0 ? { x: t.left + dx, y: t.top + dy, w: t.width, h: t.height } : undefined;
   };
+  // Every CSS color (oklch, hsl, color-mix, display-p3...) as sRGB rgba(), as the browser paints it.
+  const probe = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+  const rgbCache = new Map();
+  const rgb = (c) => {
+    if (!c || /^rgba?\(/.test(c)) return c;
+    if (rgbCache.has(c)) return rgbCache.get(c);
+    probe.clearRect(0, 0, 1, 1);
+    probe.fillStyle = "rgba(0, 0, 0, 0)";
+    probe.fillStyle = c;
+    probe.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = probe.getImageData(0, 0, 1, 1).data;
+    const out = `rgba(${r}, ${g}, ${b}, ${Math.round((a / 255) * 1000) / 1000})`;
+    rgbCache.set(c, out);
+    return out;
+  };
   const visit = (el, ox = 0, oy = 0) => {
     if (out.length >= limit) return;
     const cs = gcs(el);
@@ -204,9 +219,9 @@ function collect(limit) {
         // Where the text itself is drawn inside the box (centered button labels, padded cards).
         textBox: text && !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) ? textRect(el, sx + ox, sy + oy) : undefined,
         frame: el.tagName === "IFRAME" ? (el.contentDocument ? "same-origin" : "cross-origin") : undefined,
-        bg: cs.backgroundColor,
+        bg: rgb(cs.backgroundColor),
         // Text color, or the color an icon paints (SVG fill, icon-font glyph).
-        fg: text ? cs.color : el.tagName === "svg" ? svgColor(el) : ICON_FONT.test(cs.fontFamily) ? cs.color : undefined,
+        fg: rgb(text ? cs.color : el.tagName === "svg" ? svgColor(el) : ICON_FONT.test(cs.fontFamily) ? cs.color : undefined),
         icon: el.tagName === "svg" || ICON_FONT.test(cs.fontFamily) || undefined,
         fontSize: text ? num(cs.fontSize) : undefined,
         fontFamily: text ? cs.fontFamily.split(",")[0].replace(/["']/g, "").trim() : undefined,
@@ -215,7 +230,7 @@ function collect(limit) {
         lineHeight: text ? lh : undefined,
         radius: num(cs.borderTopLeftRadius),
         borderWidth: bw,
-        borderColor: bw > 0 ? cs.borderTopColor : undefined,
+        borderColor: bw > 0 ? rgb(cs.borderTopColor) : undefined,
         opacity: Number(cs.opacity),
       };
       index.set(el, o.i);
@@ -238,7 +253,7 @@ function collect(limit) {
   };
   visit(document.body);
   const bodyBg = gcs(document.body).backgroundColor;
-  const pageBg = /^rgba\(0, 0, 0, 0\)$|^transparent$/.test(bodyBg) ? gcs(document.documentElement).backgroundColor : bodyBg;
+  const pageBg = rgb(/^rgba\(0, 0, 0, 0\)$|^transparent$/.test(rgb(bodyBg)) ? gcs(document.documentElement).backgroundColor : bodyBg);
   return { elements: out, pageBg, truncated: out.length >= limit, scroll: { w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight } };
 }
 

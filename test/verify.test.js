@@ -283,3 +283,12 @@ test("web capture: ::before/::after text joins the element's text; same-origin i
   assert.deepEqual([inner.box.x, inner.box.y], [42, 202]);
   assert.equal(snap.elements.find((e) => e.tag === "iframe").frame, "same-origin");
 });
+
+test("web capture turns oklch, hsl and color-mix into sRGB so colors are always compared", async () => {
+  fs.writeFileSync(path.join(dir, "r8.html"), `<body style="margin:0;background:oklch(0.985 0.003 85)"><p style="color:oklch(62.3% 0.214 259.815);background:color-mix(in srgb, red 50%, blue);border:1px solid hsl(0 100% 50%)">Colors</p></body>`);
+  const cap = await call(client, "capture", { source: { kind: "web", url: url("r8.html") }, savePath: "r8-capture" });
+  assert.ok(!cap.isError, text(cap));
+  const snap = JSON.parse(fs.readFileSync(path.join(dir, "r8-capture.json"), "utf8"));
+  const p = snap.elements.find((e) => e.text === "Colors");
+  assert.deepEqual([p.fg, p.bg, p.borderColor, snap.pageBg], ["rgba(43, 127, 255, 1)", "rgba(128, 0, 128, 1)", "rgb(255, 0, 0)", "rgba(251, 250, 248, 1)"]);
+});
