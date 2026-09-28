@@ -28,7 +28,8 @@ const results = [];
 for (const server of servers) {
   for (const task of tasks) {
     for (let i = 0; i < n; i++) {
-      const w = await workspace(task, server);
+      // Every side gets the same design: built by the first server, so only the context differs.
+      const w = await workspace(task, servers[0]);
       const mcp = path.join(w.dir, "mcp.json");
       fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { "pen-multi": { command: process.execPath, args: [server], env: { PEN_MULTI_APP: "0", PEN_MULTI_HOME: path.join(w.dir, "home-agent") } } } }));
       const r = spawnSync("claude", ["-p", TASKS[task].prompt(w), "--mcp-config", mcp, "--strict-mcp-config", "--output-format", "json", "--permission-mode", "bypassPermissions"], { cwd: w.dir, encoding: "utf8", timeout: 20 * 60_000, maxBuffer: 64 << 20 });
@@ -36,7 +37,7 @@ for (const server of servers) {
       try {
         out = JSON.parse(r.stdout);
       } catch {}
-      const verdict = await check(w, server);
+      const verdict = await check(w, servers[0]); // one judge for every side
       const row = { server, task, i, match: verdict.match, verdict: verdict.summary, turns: out.num_turns, tokens: (out.usage?.input_tokens ?? 0) + (out.usage?.output_tokens ?? 0) + (out.usage?.cache_read_input_tokens ?? 0), costUsd: out.total_cost_usd, error: r.status ? (r.stderr || "").slice(0, 300) : undefined };
       results.push(row);
       console.log(JSON.stringify(row));
