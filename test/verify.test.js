@@ -252,3 +252,18 @@ test("SVG color ignores masks and definitions, reads sprite <use> icons colored 
   const res = await verify({ source: { kind: "web", url: url("faithful.html") } });
   assert.ok(!res.isError, text(res));
 });
+
+test("1px screen-reader-only boxes (Drupal clip rect(1px…), plain 1px overflow hidden) hide nested text; <use> of a filled shape in <defs> keeps its color", async () => {
+  fs.writeFileSync(
+    path.join(dir, "r6.html"),
+    `<body style="margin:0"><span style="clip:rect(1px,1px,1px,1px);height:1px;margin:-1px;overflow:hidden;position:absolute;width:1px"><span>DrupalNested</span></span>
+     <span style="width:1px;height:1px;overflow:hidden;position:absolute"><span>PlainNested</span></span>
+     <span style="width:1px;height:1px;overflow:hidden;position:relative;display:inline-block"><span style="position:fixed;top:100px;left:10px">Escapes</span></span>
+     <svg width="24" height="24"><defs><path id="p" d="M0 0h24v24H0z" fill="#f00"/></defs><use href="#p"/></svg><p>Shown</p></body>`,
+  );
+  const cap = await call(client, "capture", { source: { kind: "web", url: url("r6.html") }, savePath: "r6-capture" });
+  assert.ok(!cap.isError, text(cap));
+  const snap = JSON.parse(fs.readFileSync(path.join(dir, "r6-capture.json"), "utf8"));
+  assert.deepEqual(snap.elements.filter((e) => e.text).map((e) => e.text), ["Escapes", "Shown"]);
+  assert.equal(snap.elements.find((e) => e.tag === "svg").fg, "rgb(255, 0, 0)");
+});

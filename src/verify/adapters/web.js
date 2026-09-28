@@ -71,7 +71,8 @@ function collect(limit) {
         const pr = p.getBoundingClientRect();
         if (ps.overflowX !== "visible") (x1 = Math.max(x1, pr.left)), (x2 = Math.min(x2, pr.right));
         if (ps.overflowY !== "visible") (y1 = Math.max(y1, pr.top)), (y2 = Math.min(y2, pr.bottom));
-        if (x2 <= x1 || y2 <= y1) return true;
+        // Clipped to nothing, or to the 1px box screen-reader-only patterns leave (Drupal, old WordPress).
+        if (x2 <= x1 || y2 <= y1 || (x2 - x1 <= 1 && y2 - y1 <= 1)) return true;
       }
       if (ps.position === "fixed") return false;
       if (positioned) escapesStatic = ps.position === "absolute";
@@ -102,6 +103,13 @@ function collect(limit) {
       if (shape.getAttribute("fill") === "none") {
         if (paint(cs.stroke)) return cs.stroke;
         continue;
+      }
+      // <use> of a shape defined elsewhere paints that shape's own fill when it declares one.
+      if (shape.tagName === "use" && cs.fill === "rgb(0, 0, 0)" && !declared(shape)) {
+        const ref = (shape.getAttribute("href") || shape.getAttribute("xlink:href") || "").replace(/^#/, "");
+        const target = ref && document.getElementById(ref);
+        const painted = target && [target, ...target.querySelectorAll("*")].find((t) => t.getAttribute("fill") && paint(getComputedStyle(t).fill));
+        if (painted) return getComputedStyle(painted).fill;
       }
       // Plain black with nothing declared is SVG's initial fill, not a choice: leave it unknown.
       if (paint(cs.fill) && !(cs.fill === "rgb(0, 0, 0)" && !declared(shape))) return cs.fill;
