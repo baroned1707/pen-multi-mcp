@@ -4,7 +4,7 @@
 import { parseColor, deltaE, toHex } from "../verify/color.js";
 import { addresses } from "../design/model.js";
 
-export const RULES = ["raw-color", "contrast", "touch-target", "default-name", "off-scale", "hidden-layer", "clipped", "misaligned", "uneven-spacing", "engine-problem"];
+export const RULES = ["covered", "raw-color", "contrast", "touch-target", "default-name", "off-scale", "hidden-layer", "clipped", "misaligned", "uneven-spacing", "engine-problem"];
 
 const DEFAULT_NAME = /^(frame|rectangle|ellipse|group|text|vector|line|path|polygon|star|image|component|instance|layer|shape|khung|nhóm|hình chữ nhật|văn bản)( ?\d+)?$/i;
 // Matched word by word ("Tab indicator" is not a tab, "Fabric" is not a FAB).
@@ -121,6 +121,23 @@ export function lintScreen(model, doc = {}) {
     return { r: 255, g: 255, b: 255, a: 1 };
   };
 
+  // The first opaque layer painted after n (later siblings of n and of its ancestors) covering most of it.
+  const coveredBy = (n) => {
+    const area = n.abs.w * n.abs.h;
+    if (!area) return null;
+    for (let cur = n, p = parentOf(n); p; cur = p, p = parentOf(p)) {
+      for (const sib of p.children.slice(p.children.indexOf(cur) + 1)) {
+        if (sib.hidden || NOT_CONTENT.has(sib.type) || sib.type === "text") continue;
+        const paint = paintOf(sib.resolved?.fill ?? sib.fill);
+        if (!paint?.color || translucent(sib)) continue;
+        const w = Math.min(n.abs.x + n.abs.w, sib.abs.x + sib.abs.w) - Math.max(n.abs.x, sib.abs.x);
+        const h = Math.min(n.abs.y + n.abs.h, sib.abs.y + sib.abs.h) - Math.max(n.abs.y, sib.abs.y);
+        if (w > 0 && h > 0 && (w * h) / area >= 0.5) return sib;
+      }
+      if (p === model.root) break;
+    }
+    return null;
+  };
   const clipAncestor = (n) => {
     for (let p = parentOf(n); p; p = parentOf(p)) if (p.clip) return p;
     return null;
@@ -184,6 +201,12 @@ export function lintScreen(model, doc = {}) {
             const need = large ? 3 : 4.5;
             if (ratio < need) add("contrast", ratio < need - 1.5 ? "high" : "medium", n, `contrast ${r1(ratio)}:1 for ${size}px text (${toHex(fg)} on ${toHex(bg)}${measured ? ", measured on the render over an image or gradient" : ""}); WCAG AA needs ${need}:1.`);
           }
+        }
+
+        // A text painted over by a later opaque layer (a sibling of it or of an ancestor).
+        if (n.type === "text" && String(n.resolved?.content ?? n.content ?? "").trim()) {
+          const cover = coveredBy(n);
+          if (cover) add("covered", "high", n, `"${String(n.resolved?.content ?? n.content).slice(0, 40)}" is hidden under "${cover.name ?? cover.type}", painted after it; move the text above it or the layer below.`);
         }
 
         // Touch targets on phone screens.

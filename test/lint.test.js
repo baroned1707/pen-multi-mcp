@@ -209,3 +209,18 @@ test("contrast over a gradient is measured on the render when one is available",
   const dark = lintScreen(m, { sampleBg: () => ({ r: 14, g: 21, b: 35, a: 1 }) }).filter((x) => x.rule === "contrast");
   assert.deepEqual(dark, [], "8.5:1 on the real dark gradient passes");
 });
+
+test("covered: a text under a later opaque layer is reported; one under a translucent layer is not", async () => {
+  const { lintScreen } = await import("../src/lint/rules.js");
+  const root = mk("root", "frame", { x: 0, y: 0, w: 390, h: 844 }, { fill: "#FFFFFF" });
+  const p = mk("p", "frame", { x: 0, y: 0, w: 390, h: 100 });
+  const t = mk("t", "text", { x: 16, y: 16, w: 120, h: 20 }, { content: "Hidden words", fill: "#111111" });
+  const box = mk("box", "frame", { x: 10, y: 10, w: 200, h: 40 }, { name: "Badge", fill: "#000000" });
+  const t2 = mk("t2", "text", { x: 16, y: 60, w: 120, h: 20 }, { content: "Behind glass", fill: "#111111" });
+  const glass = mk("glass", "frame", { x: 10, y: 55, w: 200, h: 40 }, { fill: "#000000", opacity: 0.3 });
+  put(p, t, box, t2, glass);
+  put(root, p);
+  const f = lintScreen(model(root, p, t, box, t2, glass)).filter((x) => x.rule === "covered");
+  assert.deepEqual(f.map((x) => x.id), ["t"]);
+  assert.match(f[0].message, /hidden under "Badge"/);
+});

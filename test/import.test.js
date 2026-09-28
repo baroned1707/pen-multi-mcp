@@ -100,3 +100,25 @@ test("round trip on hard cases: label with input, padded text, inline code, tall
   const v = await call(client, "verify", { filePath: file, target: id, source: src });
   assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]|Verdict/.test(l)).join("\n"));
 });
+
+test("round trip: sticky heading mid page, dark inline code, padded input; the paragraph text paints above its code box", async () => {
+  fs.writeFileSync(
+    path.join(dir, "more.html"),
+    `<body style="margin:0;font-family:Arial;background:#fff">
+<input style="margin:16px;padding:14px 12px;border:1px solid #999;font-size:16px" value="Search">
+<p style="margin:16px">Use <code style="background:#000;color:#fff">npmnpmnpm</code> here</p>
+<div style="height:900px"></div>
+<h2 style="position:sticky;top:0;margin:0;padding:8px 16px;background:#eee">Section B</h2>
+<div style="height:900px"></div></body>`,
+  );
+  const src = { kind: "web", url: `file://${path.join(dir, "more.html")}` };
+  const imp = await call(client, "import_ui", { filePath: file, source: src, name: "More" });
+  assert.ok(!imp.isError, text(imp));
+  const id = /"More" \((\S+)\)/.exec(text(imp))[1];
+  const order = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "text" || /code/i.test(n.name) ? n.name : undefined)))` })))[1]);
+  assert.ok(order.findIndex((n) => /code/i.test(n)) < order.findIndex((n) => /^Use /.test(n)), `the code box comes before (under) the paragraph: ${order.join(" | ")}`);
+  const v = await call(client, "verify", { filePath: file, target: id, source: src });
+  assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]|Verdict/.test(l)).join("\n"));
+  const lint = text(await call(client, "lint", { filePath: file, target: id, rules: ["covered"] }));
+  assert.match(lint, /0 findings/);
+});

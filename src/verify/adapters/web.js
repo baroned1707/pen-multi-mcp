@@ -190,6 +190,16 @@ function collect(limit) {
     rgbCache.set(c, out);
     return out;
   };
+  // Form controls draw their value on one line centered vertically (a textarea from the top).
+  const measure = document.createElement("canvas").getContext("2d");
+  const controlTextRect = (el, content, cs, text) => {
+    const lh = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) || 16) * 1.2;
+    measure.font = cs.font;
+    const w = Math.min(content.w, measure.measureText(text).width);
+    const y = el.tagName === "TEXTAREA" ? content.y : content.y + (content.h - lh) / 2;
+    const x = cs.textAlign === "center" ? content.x + (content.w - w) / 2 : cs.textAlign === "right" || cs.textAlign === "end" ? content.x + content.w - w : content.x;
+    return { x, y, w, h: lh };
+  };
   const visit = (el, ox = 0, oy = 0) => {
     if (out.length >= limit) return;
     const cs = gcs(el);
@@ -245,11 +255,12 @@ function collect(limit) {
         marker: el.getAttribute("data-pen") || undefined,
         text: text || undefined,
         truncated: truncated || undefined,
-        fixed: cs.position === "fixed" || cs.position === "sticky" || undefined,
+        fixed: cs.position === "fixed" || undefined,
+        sticky: cs.position === "sticky" || undefined,
         box: { x: r.left + sx + ox, y: r.top + sy + oy, w: r.width, h: r.height },
         contentBox: text ? contentRect(el, r, cs, sx + ox, sy + oy) : undefined,
         // Where the text itself is drawn inside the box (centered button labels, padded cards).
-        textBox: text && !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) ? textRect(el, contentRect(el, r, cs, sx + ox, sy + oy), merged, sx + ox, sy + oy, cs) : undefined,
+        textBox: text ? (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) ? controlTextRect(el, contentRect(el, r, cs, sx + ox, sy + oy), cs, text) : textRect(el, contentRect(el, r, cs, sx + ox, sy + oy), merged, sx + ox, sy + oy, cs)) : undefined,
         frame: el.tagName === "IFRAME" ? (el.contentDocument ? "same-origin" : "cross-origin") : undefined,
         bg: rgb(cs.backgroundColor),
         // Text color, or the color an icon paints (SVG fill, icon-font glyph).

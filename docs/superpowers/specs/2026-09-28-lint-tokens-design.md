@@ -12,6 +12,7 @@ A design that is inconsistent cannot be implemented faithfully: raw hex values w
 
 | Rule | Severity | Fix |
 |---|---|---|
+| `covered` | high: a text more than half under an opaque layer painted after it (a later sibling of it or of an ancestor) — invisible in the design, and pixel comparison skips text areas | — |
 | `raw-color` | medium when a token has exactly (or within ΔE 3) that value; low when no token matches; low when it equals a themed token in this theme | exact match to one unthemed token → `$token` |
 | `contrast` | WCAG AA (4.5:1, 3:1 for ≥24px or ≥18.66px bold) against the layers below the text; high when 1.5 below; unknown over images, gradients, translucent layers (skipped) | — |
 | `touch-target` | medium: tappable-named frames/instances under 44×44 on screens ≤480 wide | — |

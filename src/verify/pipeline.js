@@ -51,7 +51,7 @@ export function verifyScreen({ design, snapshot, designImg, uiImg, tolerance }) 
         if (flaggedIds.has(id) || (!p.el.fixed && (p.how === "content" || n.kind === "section" || n.kind === "shell" || hasInside.has(id)))) continue;
         if (!wider && !p.el.fixed) continue;
         // Padded: a comparison cell straddling the edge would otherwise count half a bar as a difference.
-        const pad = (b) => ({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 });
+        const pad = (b) => ({ x: b.x - 2, y: b.y - 2, w: b.w + 4, h: b.h + 4 });
         ignore.push(pad(n.box), pad(p.el.box));
         if (n.kind === "text") continue; // texts were compared as text
         uiScaled ??= resize(uiImg, Math.round((snapshot.viewport?.w ?? design.frame.w) * k));

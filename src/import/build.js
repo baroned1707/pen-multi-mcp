@@ -77,8 +77,9 @@ export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight }
   const kept = new Map(); // element index -> spec key (frames only: a text node cannot hold children)
   const specs = [];
   const vh = snapshot.viewport?.h;
-  // A bar fixed to the bottom of the viewport sits at the bottom of a taller imported frame.
-  const shiftOf = (el) => (el.fixed && vh && frameHeight && frameHeight > vh + 1 && el.box.y + el.box.h / 2 > vh / 2 ? frameHeight - vh : 0);
+  // A bar fixed to the bottom edge of the viewport sits at the bottom of a taller imported frame
+  // (sticky elements and fixed toasts elsewhere stay where the page showed them).
+  const shiftOf = (el) => (el.fixed && vh && frameHeight && frameHeight > vh + 1 && Math.abs(vh - (el.box.y + el.box.h)) <= 1 ? frameHeight - vh : 0);
   const placed = new Map(); // element index -> its box in the imported frame
   const boxOf = (el) => {
     if (placed.has(el.i)) return placed.get(el.i);
@@ -92,7 +93,18 @@ export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight }
     for (let p = el.parent !== undefined ? byIndex.get(el.parent) : null; p; p = p.parent !== undefined ? byIndex.get(p.parent) : null) if (kept.has(p.i)) return { key: kept.get(p.i), box: boxOf(p) };
     return { key: null, box: { x: 0, y: 0 } };
   };
+  // A paragraph's own boxes (inline code, badges) must paint below its text: a text spec waits
+  // until the elements inside it are emitted.
+  const pending = [];
+  const isInside = (el, ancestorIndex) => {
+    for (let p = el.parent !== undefined ? byIndex.get(el.parent) : null; p; p = p.parent !== undefined ? byIndex.get(p.parent) : null) if (p.i === ancestorIndex) return true;
+    return false;
+  };
+  const flushPending = (el) => {
+    while (pending.length && !(el && isInside(el, pending.at(-1).owner))) specs.push(pending.pop().spec);
+  };
   for (const el of snapshot.elements) {
+    flushPending(el);
     const bg = tokenOrHex(el.bg, tokens);
     const border = el.borderWidth > 0 ? tokenOrHex(el.borderColor, tokens) : null;
     const visual = VISUAL_TAGS.test(el.tag ?? "") || el.icon;
@@ -108,7 +120,7 @@ export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight }
     if (text && !bg && !border && !visual) {
       const props = { type: "text", name, content: text, textGrowth: "fixed-width", ...textPlacement({ ...el, box: own, contentBox: moved(el.contentBox), textBox: moved(el.textBox) }, pbox) };
       Object.assign(props, textStyle(el, tokens));
-      specs.push({ key, parent, props });
+      pending.push({ owner: el.i, spec: { key, parent, props } });
       continue; // not kept: its children (inline code, inputs) go to the nearest frame
     }
     const props = { type: "frame", name, x, y, width: w, height: h, layout: "none" };
@@ -131,6 +143,7 @@ export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight }
       specs.push({ key: `n${specs.length}`, parent: key, props: tprops });
     }
   }
+  flushPending(null);
   return specs;
 }
 
