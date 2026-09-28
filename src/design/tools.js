@@ -268,5 +268,5 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
       return wrap(target, [...notes, ...lines]);
     },
   );
-  return { invalidate, resolveTarget, reader, wrap };
+  return { invalidate, resolveTarget, reader, wrap, analysisOf };
 }

@@ -58,6 +58,7 @@ It can run next to the official `pencil` server.
 |---|---|
 | `read_skill`, `get_style` | Same as the official server (cached; no design file needed) |
 | `overview`, `inspect` | Design context: the whole document, and one screen as data (see below) |
+| `lint`, `tokens` | Design-file quality checks with safe fixes; design tokens as CSS / Tailwind / JSON / React Native, diffed against code |
 | `verify`, `capture`, `contact_sheet` | Check the running implementation against the design on web, React Native, native Android/iOS or a screenshot (see below) |
 | `execute` | Run a snippet against `filePath` (or the app's active document); supports `editId` + `edits` retries |
 | `get_app_state` | Document state of one file, or of the app |
@@ -114,6 +115,12 @@ The web capture scrolls through the page first (so scroll-revealed content is sh
 `capture` stores a snapshot on its own (to verify again later with `snapshot`, or to look at what the UI renders); `contact_sheet` puts several verify reports into one image and returns it inline.
 
 The browser is Playwright's Chromium if installed (`npx playwright install chromium`), else Google Chrome, else `PEN_MULTI_BROWSER`. `native` needs `adb` or `maestro` (+ Xcode's `simctl`); `PEN_MULTI_ADB`, `PEN_MULTI_XCRUN` and `PEN_MULTI_MAESTRO` point at other binaries. pen-multi never starts the app, dev server or simulator: pass a running URL or device.
+
+## Design quality: `lint` and `tokens`
+
+`lint` checks one screen or the document's screens for what makes a design hard to implement or to use: raw colors where a token exists, text contrast below WCAG AA (measured against the layers below the text; images and gradients are skipped), touch targets under 44×44 on phone screens, default layer names, off-scale font sizes and spacing, hidden or clipped leftovers (content below a scroll fold is fine), near-misaligned and unevenly spaced siblings in free layouts, engine-reported problems, and screens missing a theme most screens have. `fix: ["names", "tokens"]` applies the unambiguous fixes: rename default-named layers after their text or component, and replace a raw color with the one token that has exactly that value.
+
+`tokens` turns the design's variables into code — `css` (custom properties per theme, with `.dark` and `prefers-color-scheme`), `tailwind`, W3C `json`, or a typed `react-native` object — and with `compare` lists the tokens a code file is missing, has changed, or has extra.
 
 ## Many agents, many projects
 

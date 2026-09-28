@@ -15,6 +15,7 @@ import { carryImages, readPrinted, snippets } from "./transfer.js";
 import { FileLock, SessionPool, config, normalize, withMachineLock } from "./pool.js";
 import { prewarm } from "./prewarm.js";
 import { registerVerifyTools } from "./verify/tools.js";
+import { registerLintTools } from "./lint/tools.js";
 import { cliVersion } from "./shell.js";
 import { registerDesignTools } from "./design/tools.js";
 
@@ -47,6 +48,7 @@ Implementing or refactoring UI from a design (port mode):
 - The design is the source of truth for structure, order, content and styling. "Update the existing component" means change it until it matches the design, never keep what is there; rebuild the app shell, navigation or a component when its structure differs.
 - Before editing code: call overview, then inspect the target screen (save it with savePath and re-read that file after context compaction). List the structural differences between the design and the current UI (shell, navigation, section order, missing or extra elements) and work through that list.
 - If project rules conflict with matching the design (e.g. "preserve the theme"), ask the user once which wins and follow the answer.
+- Before porting a screen, run lint on it: a raw color, a default-named layer or a clipped text in the design becomes a bug in code. Fix what lint can fix (fix: ["names", "tokens"]) and ask the user about the rest. Keep code tokens in sync with tokens (compare the project's token file).
 - Never port from screenshots or from memory: read the design as data with inspect. Screenshots are for a human sanity check, not for measurements.
 - While implementing, mark elements with the layer address inspect prints: data-pen="Header/Title" on web, testID="pen:Header/Title" in React Native (add probe/react-native/PenProbe.js to the app root once).
 - A port is done only when verify reports MATCH for every implemented screen × width × theme: run it against the running app (web URL, pen-probe, native device, or a screenshot), fix the high findings first (missing, extra, order), then the rest, and re-run. Do not report a screen as done from a screenshot.
@@ -293,7 +295,11 @@ tool(
       .optional()
       .describe("Patches for the failed snippet identified by editId; applied in order, then the snippet re-runs."),
   },
-  async ({ filePath: f, input, editId, edits }) => {
+  (args) => executeSnippet(args),
+);
+
+/** The execute tool's work: routes the file, runs the snippet, marks writes dirty and saves them. */
+async function executeSnippet({ filePath: f, input, editId, edits }) {
     if (!input && !(editId && edits)) throw new Error("Provide `input`, or `editId` together with `edits`.");
     const payload = input ? { input } : { editId, edits };
     const writes = mayWrite(input);
@@ -316,8 +322,7 @@ tool(
       if (config.autosave) scheduleHeadlessSave(session);
       return withHints(ok(`${res.text}\n\n${config.autosave ? SAVING_NOTE : NOT_SAVING_NOTE}`, notes, file), hints);
     });
-  },
-);
+}
 
 const BROWSER_READS = new Set(["load-page", "return-element", "return-screenshot"]);
 const BROWSER_LOCK = "pen.dev app browser";
@@ -561,6 +566,7 @@ tool(
 
 designTools = registerDesignTools({ tool, z, route, app, pool, saver, timings, ok, fail, fromApp, textOf, optionalFilePath });
 registerVerifyTools({ tool, z, route, design: designTools, withMachineLock, optionalFilePath, ok });
+registerLintTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath });
 
 let shuttingDown = false;
 async function shutdown() {
