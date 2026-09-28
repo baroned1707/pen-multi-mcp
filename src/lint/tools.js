@@ -5,6 +5,8 @@ import { buildModel } from "../design/model.js";
 import { ReadError, readSubtree } from "../design/read.js";
 import { lintScreen, lintVariants, RULES } from "./rules.js";
 import { diffTokens, normalizeTokens, renderTokens } from "./tokens.js";
+import { readPng, sampleColors } from "../verify/image.js";
+import os from "node:os";
 
 const SEVERITY = { high: 0, medium: 1, low: 2 };
 const FIXABLE = { names: "default-name", tokens: "raw-color" };
@@ -32,16 +34,43 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
       const doc = { rareFontSizes: new Set(analysis.typeScale.offScale), rareSpacing: new Set(analysis.spacing.offScale) };
       const findings = [];
       const names = new Map();
-      for (const id of ids) {
-        const model = buildModel(await readSubtree(run, id));
-        names.set(id, model.root.name ?? id);
-        for (const x of lintScreen(model, doc)) findings.push({ ...x, screen: model.root.name ?? id });
+      const components = new Map(); // component id -> name, as used by the checked screens
+      const renderDir = fs.mkdtempSync(path.join(os.tmpdir(), "pen-multi-lint-"));
+      try {
+        for (const id of ids) {
+          const model = buildModel(await readSubtree(run, id));
+          names.set(id, model.root.name ?? id);
+          for (const n of model.nodes.values()) if (n.component && !n.component.swapped) components.set(n.component.id, n.component.name);
+          // Texts over images or gradients need the render to measure what is behind them: lint once
+          // without it, and only if such a text exists, render the screen and lint again with sampling.
+          let wanted = false;
+          let found = lintScreen(model, { ...doc, sampleBg: () => ((wanted = true), null) });
+          if (wanted) {
+            const res = await run(`Export(${JSON.stringify([id])}, "png", ${JSON.stringify(renderDir)})`);
+            const m = /Exported (.+\.png)/.exec(res.text ?? "");
+            const png = m ? m[1].trim() : path.join(renderDir, `${id}.png`);
+            const img = !res.error && fs.existsSync(png) ? readPng(png) : null;
+            if (img) found = lintScreen(model, { ...doc, sampleBg: (box) => sampleColors(img, box, img.width / model.root.abs.w).bg ?? null });
+          }
+          for (const x of found) findings.push({ ...x, screen: model.root.name ?? id });
+        }
+      } finally {
+        fs.rmSync(renderDir, { recursive: true, force: true });
+      }
+      // Instances show their components: lint those once (their fixes change every instance).
+      for (const [id, name] of [...components].slice(0, 40)) {
+        try {
+          const model = buildModel(await readSubtree(run, id));
+          for (const x of lintScreen(model, { ...doc, mobile: false })) if (x.rule !== "touch-target") findings.push({ ...x, screen: `component ${name}` });
+        } catch {
+          // a component in another file or unreadable: skip
+        }
       }
       if (!wanted) findings.push(...lintVariants(analysis).map((x) => ({ ...x, screen: x.address })));
       const shown = findings.filter((x) => !rules || rules.includes(x.rule)).sort((a, b) => SEVERITY[a.severity] - SEVERITY[b.severity] || a.rule.localeCompare(b.rule));
 
       // Fixes: one Update per node, applied in batches.
-      const applied = [];
+      const applied = new Set(); // "id|rule" of findings a fix resolved
       const wanting = new Set(fix.map((k) => FIXABLE[k]));
       const todo = shown.filter((x) => x.fix && wanting.has(x.rule));
       if (todo.length) {
@@ -52,23 +81,23 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
           const batch = entries.slice(i, i + 150);
           const input = `const U = ${JSON.stringify(batch)};\nfor (const [id, props] of U) Update(id, props);\nPrint("FIXED", U.length);`;
           const res = await executeSnippet({ filePath: target.mode === "app" ? target.file : target.file, input });
-          if (res.isError) throw new ReadError(`applying fixes failed after ${applied.length}: ${res.content.map((c) => c.text).join("\n").slice(0, 400)}`);
-          applied.push(...batch.map(([id]) => id));
+          if (res.isError) throw new ReadError(`applying fixes failed after ${applied.size} changes: ${res.content.map((c) => c.text).join("\n").slice(0, 400)}`);
+          for (const x of todo) if (batch.some(([id]) => id === x.id)) applied.add(`${x.id}|${x.rule}`);
         }
       }
 
       const count = (s) => shown.filter((x) => x.severity === s).length;
       const lines = [
         `# lint: ${wanted ? names.get(ids[0]) : `${ids.length} of ${frames.length} screens`}${!wanted && frames.length > ids.length ? ` (raise maxScreens to check the rest)` : ""}`,
-        `${shown.length} findings — ${count("high")} high, ${count("medium")} medium, ${count("low")} low${todo.length ? ` · fixed ${applied.length} nodes (${fix.join(", ")})` : ""}`,
+        `${shown.length} findings — ${count("high")} high, ${count("medium")} medium, ${count("low")} low${todo.length ? ` · fixed ${applied.size} findings (${fix.join(", ")})` : ""}`,
       ];
       const byRule = new Map();
       for (const x of shown) byRule.set(x.rule, (byRule.get(x.rule) ?? 0) + 1);
       if (byRule.size) lines.push(`By rule: ${[...byRule].map(([r, n]) => `${r} ${n}`).join(", ")}`);
-      const fixable = shown.filter((x) => x.fix && !applied.includes(x.id));
+      const fixable = shown.filter((x) => x.fix && !applied.has(`${x.id}|${x.rule}`));
       if (fixable.length) lines.push(`Safe fixes available for ${fixable.length}: pass fix ${JSON.stringify([...new Set(fixable.map((x) => Object.keys(FIXABLE).find((k) => FIXABLE[k] === x.rule)))])}.`);
       lines.push("");
-      for (const x of shown.slice(0, maxLines)) lines.push(`- [${x.severity}] ${x.rule} · ${x.screen} · ${x.address} (${x.id}): ${x.message}${applied.includes(x.id) ? " — fixed" : ""}`);
+      for (const x of shown.slice(0, maxLines)) lines.push(`- [${x.severity}] ${x.rule} · ${x.screen} · ${x.address} (${x.id}): ${x.message}${applied.has(`${x.id}|${x.rule}`) ? " — fixed" : ""}`);
       if (shown.length > maxLines) lines.push(`… ${shown.length - maxLines} more (raise maxLines, or filter with rules).`);
       if (!shown.length) lines.push("No findings.");
       return design.wrap(target, lines);
@@ -94,10 +123,12 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
       const n = normalizeTokens(variables, themes);
       if (!n.tokens.length) return design.wrap(target, ["The document has no variables; define colors, spacing and type as variables first (SetVariables in execute)."]);
       const lines = [`${n.tokens.length} tokens${n.axis ? `, themes ${n.axis}: ${n.themes.join(", ")}` : ""}.`];
+      if (n.ignoredAxes.length) lines.push(`Only the first theme axis (${n.axis}) is exported; ${n.ignoredAxes.join(", ")} values are not.`);
+      if (n.collisions.length) throw new ReadError(`These variables become the same code name: ${n.collisions.join("; ")}. Rename one of each pair in the design.`);
       if (compare) {
         const file = path.resolve(process.cwd(), compare);
         if (!fs.existsSync(file)) throw new ReadError(`compare file not found: ${file}`);
-        const d = diffTokens(n, fs.readFileSync(file, "utf8"));
+        const d = diffTokens(n, fs.readFileSync(file, "utf8"), { json: /\.json$/i.test(file) ? true : /\.(css|scss|less|pcss)$/i.test(file) ? false : undefined });
         lines.push(
           "",
           `## Compared with ${file}`,
@@ -110,7 +141,7 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
       const output = renderTokens(n, format);
       if (savePath) {
         const out = path.resolve(process.cwd(), savePath);
-        if (fs.existsSync(out) && !fs.readFileSync(out, "utf8").includes("Generated by pen-multi") && !(format === "json" && /"\$value"/.test(fs.readFileSync(out, "utf8")))) {
+        if (fs.existsSync(out) && !fs.readFileSync(out, "utf8").includes("Generated by pen-multi")) {
           throw new ReadError(`${out} exists and was not generated by tokens; refusing to overwrite it. Use compare to diff it instead.`);
         }
         fs.mkdirSync(path.dirname(out), { recursive: true });

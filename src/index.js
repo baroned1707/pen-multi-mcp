@@ -16,6 +16,8 @@ import { FileLock, SessionPool, config, normalize, withMachineLock } from "./poo
 import { prewarm } from "./prewarm.js";
 import { registerVerifyTools } from "./verify/tools.js";
 import { registerLintTools } from "./lint/tools.js";
+import { registerImportTools } from "./import/tools.js";
+import { conventions } from "./design/tools.js";
 import { cliVersion } from "./shell.js";
 import { registerDesignTools } from "./design/tools.js";
 
@@ -565,8 +567,9 @@ tool(
 );
 
 designTools = registerDesignTools({ tool, z, route, app, pool, saver, timings, ok, fail, fromApp, textOf, optionalFilePath });
-registerVerifyTools({ tool, z, route, design: designTools, withMachineLock, optionalFilePath, ok });
+const verifyTools = registerVerifyTools({ tool, z, route, design: designTools, withMachineLock, optionalFilePath, ok, conventions });
 registerLintTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath });
+registerImportTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath, capture: verifyTools.capture, source: verifyTools.source, conventions });
 
 let shuttingDown = false;
 async function shutdown() {

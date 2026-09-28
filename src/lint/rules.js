@@ -7,7 +7,14 @@ import { addresses } from "../design/model.js";
 export const RULES = ["raw-color", "contrast", "touch-target", "default-name", "off-scale", "hidden-layer", "clipped", "misaligned", "uneven-spacing", "engine-problem"];
 
 const DEFAULT_NAME = /^(frame|rectangle|ellipse|group|text|vector|line|path|polygon|star|image|component|instance|layer|shape|khung|nhóm|hình chữ nhật|văn bản)( ?\d+)?$/i;
-const TAPPABLE = /button|btn|icon ?button|tab|toggle|switch|checkbox|radio|chip|link|fab|nút|menu item|list item|cell|row action/i;
+// Matched word by word ("Tab indicator" is not a tab, "Fabric" is not a FAB).
+const TAPPABLE = /^(button|btn|iconbutton|tab|toggle|switch|checkbox|radio|chip|link|fab|nút|cta|close|back)$/i;
+const words = (name) =>
+  String(name ?? "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .split(/[\s/_\-·.:()]+/)
+    .filter(Boolean);
+const tappableName = (name) => words(name).some((w) => TAPPABLE.test(w)) || /icon ?button/i.test(name ?? "");
 const NOT_CONTENT = new Set(["note", "prompt", "context"]);
 
 const r1 = (v) => Math.round(v * 10) / 10;
@@ -78,13 +85,31 @@ export function lintScreen(model, doc = {}) {
   // What a text sits on: layers below it that it overlaps (earlier siblings of it and of its
   // ancestors), then its ancestors' fills. Images, gradients and translucent layers make it
   // unknown (null): contrast is then not judged.
+  const translucent = (x) => {
+    const o = Number(x.resolved?.opacity ?? x.opacity);
+    return Number.isFinite(o) && o < 1;
+  };
+  // The topmost painted layer inside `x`'s subtree (x included) under `box`, in paint order:
+  // { color }, { unknown } (image, gradient, translucent), or null when nothing there paints.
+  const topPaint = (x, box) => {
+    if (x.hidden || !overlaps(x.abs, box)) return null;
+    for (const c of [...x.children].reverse()) {
+      const hit = topPaint(c, box);
+      if (hit) return hit;
+    }
+    if (x.type === "image" || x.type === "icon") return x.type === "image" ? { unknown: true } : null;
+    if (x.type === "text") return null;
+    const paint = paintOf(x.resolved?.fill ?? x.fill);
+    if (paint && translucent(x)) return { unknown: true };
+    return paint;
+  };
   const backdrop = (n) => {
+    if (translucent(n)) return null;
     for (let cur = n, p = parentOf(n); p; cur = p, p = parentOf(p)) {
+      if (translucent(p)) return null;
       const below = p.children.slice(0, p.children.indexOf(cur)).reverse();
       for (const sib of below) {
-        if (sib.hidden || !overlaps(sib.abs, n.abs)) continue;
-        if (sib.type === "image") return null;
-        const paint = paintOf(sib.resolved?.fill ?? sib.fill);
+        const paint = topPaint(sib, n.abs);
         if (paint?.unknown) return null;
         if (paint?.color) return paint.color;
       }
@@ -106,53 +131,68 @@ export function lintScreen(model, doc = {}) {
     return Boolean(c) && n.abs.x < c.x + c.w && n.abs.x + n.abs.w > c.x && (n.abs.y >= c.y + c.h - 0.5 || n.abs.x >= c.x + c.w - 0.5);
   };
 
+  // Raw colors where a token exists (the root too: a screen's background, a component's fill).
+  const checkColors = (n, own, instance) => {
+    for (const prop of ["fill", "stroke"]) {
+      const raw = n[prop];
+      // An instance shows its component's colors: fix them on the component (checked separately).
+      if (!own || instance || typeof raw !== "string" || raw.startsWith("$")) continue;
+      const c = parseColor(raw);
+      if (!c || c.a <= 0.01) continue; // transparent paints nothing; no token needed
+      if (c.a < 0.999) {
+        // Translucent: only an exact match (alpha included) is the same color.
+        const same = tokens.filter((t) => toHex(t.color) === toHex(c));
+        if (same.length === 1 && !same[0].themed) add("raw-color", "medium", n, `${prop} ${toHex(c)} is the value of $${same[0].name}; use the token.`, { props: { [prop]: `$${same[0].name}` } });
+        continue;
+      }
+      const exact = tokens.filter((t) => !t.themed && toHex(t.color) === toHex(c));
+      const near = tokens.map((t) => ({ t, d: deltaE(t.color, c) })).sort((a, b) => a.d - b.d)[0];
+      if (exact.length === 1) add("raw-color", "medium", n, `${prop} ${toHex(c)} is the value of $${exact[0].name}; use the token.`, { props: { [prop]: `$${exact[0].name}` } });
+      else if (exact.length > 1) add("raw-color", "medium", n, `${prop} ${toHex(c)} is the value of ${exact.map((t) => `$${t.name}`).join(", ")}; use the one that means this.`);
+      else if (near && near.d < 0.5 && near.t.themed)
+        add("raw-color", "low", n, `${prop} ${toHex(c)} equals $${near.t.name} in this theme, but that token changes with the theme; use it if this color should follow the theme, or add a fixed token if it should not.`);
+      else if (near && near.d < 3) add("raw-color", "medium", n, `${prop} ${toHex(c)} is almost $${near.t.name} (${toHex(near.t.color)}, ΔE ${r1(near.d)}); use the token if that is what it means.`);
+      else if (tokens.length) add("raw-color", "low", n, `${prop} ${toHex(c)} matches no color token; add a token or use an existing one.`);
+    }
+
+  };
+
   const walk = (n, hiddenAbove, inInstance) => {
     if (NOT_CONTENT.has(n.type)) return;
     const hidden = hiddenAbove || n.hidden;
     const instance = Boolean(n.component) && !inInstance;
     const own = !inInstance; // inside an instance, fix the component instead
+    if (n === model.root && !n.hidden) checkColors(n, true, false);
     if (n !== model.root && !hiddenAbove) {
       if (n.hidden && own) add("hidden-layer", "low", n, `hidden layer "${n.name ?? n.type}" left in the screen — delete it or show it; implementers cannot tell whether it belongs.`);
 
       if (!hidden) {
-        // Raw colors where a token exists.
-        for (const prop of ["fill", "stroke"]) {
-          const raw = n[prop];
-          if (!own || typeof raw !== "string" || raw.startsWith("$")) continue;
-          const c = parseColor(raw);
-          if (!c || c.a <= 0.01) continue; // transparent paints nothing; no token needed
-          if (c.a < 0.999) {
-            // Translucent: only an exact match (alpha included) is the same color.
-            const same = tokens.filter((t) => toHex(t.color) === toHex(c));
-            if (same.length === 1 && !same[0].themed) add("raw-color", "medium", n, `${prop} ${toHex(c)} is the value of $${same[0].name}; use the token.`, { props: { [prop]: `$${same[0].name}` } });
-            continue;
-          }
-          const exact = tokens.filter((t) => !t.themed && toHex(t.color) === toHex(c));
-          const near = tokens.map((t) => ({ t, d: deltaE(t.color, c) })).sort((a, b) => a.d - b.d)[0];
-          if (exact.length === 1) add("raw-color", "medium", n, `${prop} ${toHex(c)} is the value of $${exact[0].name}; use the token.`, { props: { [prop]: `$${exact[0].name}` } });
-          else if (near && near.d < 0.5 && near.t.themed)
-            add("raw-color", "low", n, `${prop} ${toHex(c)} equals $${near.t.name} in this theme, but that token changes with the theme; use it if this color should follow the theme, or add a fixed token if it should not.`);
-          else if (near && near.d < 3) add("raw-color", "medium", n, `${prop} ${toHex(c)} is almost $${near.t.name} (${toHex(near.t.color)}, ΔE ${r1(near.d)}); use the token if that is what it means.`);
-          else if (tokens.length) add("raw-color", "low", n, `${prop} ${toHex(c)} matches no color token; add a token or use an existing one.`);
-        }
+        checkColors(n, own, instance);
 
         // Text contrast against what it sits on (WCAG AA).
         if (n.type === "text" && String(n.resolved?.content ?? n.content ?? "").trim()) {
           const fg = fillColor(n.resolved?.fill ?? n.fill);
           const size = Number(n.resolved?.fontSize ?? n.fontSize) || 14;
           const weight = Number(n.resolved?.fontWeight ?? n.fontWeight) || 400;
-          const bg = fg && fg.a >= 0.999 ? backdrop(n) : null;
+          // Over images, gradients or translucent layers the color behind is measured on the render.
+          let bg = fg && fg.a >= 0.999 ? backdrop(n) : null;
+          const measured = fg && fg.a >= 0.999 && !bg && doc.sampleBg ? doc.sampleBg(n.abs) : null;
+          bg ??= measured;
           if (bg) {
             const ratio = contrast(fg, bg);
             const large = size >= 24 || (size >= 18.66 && weight >= 700);
             const need = large ? 3 : 4.5;
-            if (ratio < need) add("contrast", ratio < need - 1.5 ? "high" : "medium", n, `contrast ${r1(ratio)}:1 for ${size}px text (${toHex(fg)} on ${toHex(bg)}); WCAG AA needs ${need}:1.`);
+            if (ratio < need) add("contrast", ratio < need - 1.5 ? "high" : "medium", n, `contrast ${r1(ratio)}:1 for ${size}px text (${toHex(fg)} on ${toHex(bg)}${measured ? ", measured on the render over an image or gradient" : ""}); WCAG AA needs ${need}:1.`);
           }
         }
 
         // Touch targets on phone screens.
         const label = `${n.name ?? ""} ${n.component?.name ?? ""}`;
-        if (mobile && (instance || n.type === "frame") && own && TAPPABLE.test(label) && (n.abs.w < 44 || n.abs.h < 44) && n.abs.w > 0) {
+        const bigTappableAbove = (() => {
+          for (let p = parentOf(n); p && p !== model.root; p = parentOf(p)) if (tappableName(`${p.name ?? ""} ${p.component?.name ?? ""}`) && p.abs.w >= 44 && p.abs.h >= 44) return true;
+          return false;
+        })();
+        if (mobile && (instance || n.type === "frame") && own && tappableName(label) && (n.abs.w < 44 || n.abs.h < 44) && Math.min(n.abs.w, n.abs.h) > 4 && !bigTappableAbove) {
           add("touch-target", "medium", n, `"${n.name}" is ${r1(n.abs.w)}×${r1(n.abs.h)}; tappable things need 44×44 (Apple) / 48×48 (Material) — enlarge it or its hit area.`);
         }
 
@@ -160,7 +200,8 @@ export function lintScreen(model, doc = {}) {
         if (own && n.name && DEFAULT_NAME.test(n.name.trim())) {
           const text = n.type === "text" ? String(n.resolved?.content ?? n.content ?? "").trim() : null;
           const onlyText = !text && n.children.length === 1 && n.children[0].type === "text" ? String(n.children[0].resolved?.content ?? n.children[0].content ?? "").trim() : null;
-          const proposal = instance ? n.component?.name : (text ?? onlyText)?.replace(/\s+/g, " ").slice(0, 40);
+          // "/" separates layer addresses (verify markers): never put it in a name.
+          const proposal = (instance ? n.component?.name : (text ?? onlyText)?.replace(/\s+/g, " ").slice(0, 40))?.replace(/\s*\/\s*/g, " – ");
           add("default-name", "low", n, `default name "${n.name}"${proposal ? `; rename to "${proposal}"` : " — name it for what it is"}.`, proposal ? { props: { name: proposal } } : undefined);
         }
 
@@ -183,7 +224,11 @@ export function lintScreen(model, doc = {}) {
             top: n.abs.y < c.y - 0.5, left: n.abs.x < c.x - 0.5,
             bottom: n.abs.y + n.abs.h > c.y + c.h + 0.5, right: n.abs.x + n.abs.w > c.x + c.w + 0.5,
           };
-          const scrolls = past && !past.top && !past.left && (past.bottom !== past.right);
+          // A scroll area or carousel: the screen itself, or a container where several children run
+          // past the same edge. A lone text cut by a small box is a real cut.
+          const axis = past && (past.bottom && !past.right ? "y" : past.right && !past.bottom ? "x" : null);
+          const runners = axis ? clip.children.filter((k) => !k.hidden && (axis === "y" ? k.abs.y + k.abs.h > c.y + c.h + 0.5 : k.abs.x + k.abs.w > c.x + c.w + 0.5)).length : 0;
+          const scrolls = past && !past.top && !past.left && axis && (clip === model.root || runners >= 2 || (clip.layout === (axis === "y" ? "vertical" : "horizontal") && clip.children.length >= 3));
           if (!scrolls) add("clipped", "medium", n, `"${n.name ?? n.type}" is partly cut off by "${clip?.name ?? "its container"}"; the implementation cannot match a cut-off design.`);
         } else if (n.clipped === "fully" && own && !isScrollContent(n)) add("clipped", "low", n, `"${n.name ?? n.type}" lies entirely outside its clipping container (invisible) — move or delete it.`);
 
@@ -196,13 +241,16 @@ export function lintScreen(model, doc = {}) {
     const free = n.type === "group" || (n.type === "frame" && n.layout === "none");
     if (free && !hidden && !inInstance) {
       const kids = n.children.filter((c) => !c.hidden && !NOT_CONTENT.has(c.type) && c.abs.w > 0);
-      for (let i = 0; i < kids.length; i++) {
-        for (let j = i + 1; j < kids.length; j++) {
-          const a = kids[i], b = kids[j];
-          const dl = Math.abs(a.abs.x - b.abs.x);
-          const overlapY = Math.min(a.abs.y + a.abs.h, b.abs.y + b.abs.h) - Math.max(a.abs.y, b.abs.y);
-          if (dl > 0.5 && dl <= 3 && overlapY < 0) add("misaligned", "low", b, `left edge ${r1(b.abs.x)} vs ${r1(a.abs.x)} of "${a.name ?? a.type}" above/below — ${r1(dl)}px off; align them.`);
-        }
+      // Left edges: a child 1-3px off an edge that more siblings share is misaligned (once).
+      const edges = new Map();
+      for (const k of kids) edges.set(r1(k.abs.x), (edges.get(r1(k.abs.x)) ?? 0) + 1);
+      for (const k of kids) {
+        const x = r1(k.abs.x);
+        const near = [...edges].filter(([e, count]) => e !== x && Math.abs(e - x) <= 3 && count > edges.get(x)).sort((a, b) => b[1] - a[1])[0];
+        if (!near) continue;
+        const partner = kids.find((o) => r1(o.abs.x) === near[0]);
+        const centered = kids.some((o) => r1(o.abs.x) === near[0] && Math.abs(o.abs.x + o.abs.w / 2 - (k.abs.x + k.abs.w / 2)) <= 0.5);
+        if (!centered) add("misaligned", "low", k, `left edge ${x} vs ${near[0]} shared by ${near[1]} siblings (e.g. "${partner?.name ?? partner?.type}") — ${r1(Math.abs(near[0] - x))}px off; align them.`);
       }
       const column = [...kids].sort((a, b) => a.abs.y - b.abs.y);
       const gaps = column.slice(1).map((c, k) => r1(c.abs.y - (column[k].abs.y + column[k].abs.h))).filter((g) => g >= 0);
@@ -227,7 +275,9 @@ export function lintScreen(model, doc = {}) {
 export function lintVariants(analysis) {
   const out = [];
   const rows = analysis.matrix?.rows ?? [];
-  const themesOf = (r) => new Set(Object.values(r.cells).flat().map((c) => c.theme).filter(Boolean));
+  // A frame without a theme shows the document's first (base) theme.
+  const base = Object.values(analysis.themes ?? {})[0]?.[0] ?? null;
+  const themesOf = (r) => new Set(Object.values(r.cells).flat().map((c) => c.theme ?? base).filter(Boolean));
   const allThemes = new Map();
   for (const r of rows) for (const t of themesOf(r)) allThemes.set(t, (allThemes.get(t) ?? 0) + 1);
   for (const [t, n] of allThemes) {

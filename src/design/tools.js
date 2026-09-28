@@ -10,8 +10,11 @@ import { ReadError, readOverview, readSubtree } from "./read.js";
 
 const APP_CACHE_MS = 60_000;
 
-/** `.pen-multi.json` next to the .pen: { screenPattern, flows: ["docs/flow.json", ...] }. */
-function conventions(file) {
+/**
+ * `.pen-multi.json` next to the .pen: { screenPattern, flows: ["docs/flow.json", ...],
+ * baseUrl: "http://localhost:5173", routes: { "<screen name or code>": "/path" } }.
+ */
+export function conventions(file) {
   const p = path.join(path.dirname(file), ".pen-multi.json");
   if (!fs.existsSync(p)) return {};
   const conf = JSON.parse(fs.readFileSync(p, "utf8"));
@@ -20,7 +23,7 @@ function conventions(file) {
     const doc = JSON.parse(fs.readFileSync(path.resolve(path.dirname(p), f), "utf8"));
     flowEdges.push(...(doc.edges ?? []));
   }
-  return { screenPattern: conf.screenPattern, flowEdges };
+  return { screenPattern: conf.screenPattern, flowEdges, baseUrl: conf.baseUrl, routes: conf.routes ?? {} };
 }
 
 const fileHash = (file) => (fs.existsSync(file) ? createHash("sha1").update(fs.readFileSync(file)).digest("hex") : null);

@@ -61,14 +61,15 @@ test("lint finds the planted problems, each on the right node", async () => {
   has("raw-color", ids.r1, /is the value of \$brand; use the token/);
   has("raw-color", ids.t1, /is the value of \$ink/);
   assert.match(t, /uneven-spacing .*16px apart except 17px/);
-  assert.doesNotMatch(t, /raw-color .*#FFFFFF/, "a color equal to a themed token is not auto-mapped");
+  assert.doesNotMatch(t, /#FFFFFF is the value of/, "a color equal to a themed token is not auto-mapped");
+  assert.match(t, /\[low\] raw-color .*#FFFFFF equals \$surface in this theme, but that token changes with the theme/);
   assert.match(t, /Safe fixes available for \d+: pass fix/);
 });
 
 test("lint fix renames default-named layers and puts tokens on exact raw colors", async () => {
   const res = await lint({ fix: ["names", "tokens"] });
   assert.ok(!res.isError, text(res));
-  assert.match(text(res), /fixed \d+ nodes \(names, tokens\)/);
+  assert.match(text(res), /fixed \d+ findings \(names, tokens\)/);
   const out = await exec(`Print("N", JSON.stringify([Get(${JSON.stringify(ids.t1)}), Get(${JSON.stringify(ids.r1)})].map((n) => [n.name, n.fill])))`);
   assert.deepEqual(JSON.parse(/N (.*)/.exec(out)[1]), [["Welcome back", "$ink"], ["Rectangle 7", "$brand"]]);
   const again = text(await lint({ rules: ["raw-color"] }));
@@ -110,4 +111,101 @@ test("contrast and token helpers", () => {
   const n = normalizeTokens({ a: { type: "color", value: "#fff" } }, {});
   assert.match(renderTokens(n, "css"), /--a: #fff;/);
   assert.deepEqual(diffTokens(n, ":root{--a:#FFFFFF}"), { missing: [], changed: [], extra: [] });
+});
+
+// Synthetic models for rule edge cases (no engine needed).
+const mk = (id, type, abs, extra = {}) => ({ id, type, name: extra.name ?? id, abs, children: [], ...extra });
+const model = (root, ...all) => {
+  const nodes = new Map([root, ...all].map((n) => [n.id, n]));
+  return { root, nodes, variables: {}, isToken: () => false, token: () => null };
+};
+const put = (parent, ...kids) => {
+  for (const k of kids) {
+    k.parent = parent.id;
+    parent.children.push(k);
+  }
+};
+
+test("contrast is not judged over images inside groups or under translucent layers", async () => {
+  const { lintScreen } = await import("../src/lint/rules.js");
+  const root = mk("root", "frame", { x: 0, y: 0, w: 390, h: 844 }, { fill: "#FFFFFF" });
+  const hero = mk("hero", "group", { x: 0, y: 0, w: 390, h: 200 });
+  const photo = mk("photo", "rectangle", { x: 0, y: 0, w: 390, h: 200 }, { fill: { type: "image", url: "x.png" } });
+  const title = mk("title", "text", { x: 16, y: 150, w: 200, h: 24 }, { content: "Over a photo", fill: "#FFFFFF", fontSize: 16 });
+  const scrim = mk("scrim", "rectangle", { x: 0, y: 300, w: 390, h: 100 }, { fill: "#000000", opacity: 0.05 });
+  const dim = mk("dim", "text", { x: 16, y: 320, w: 200, h: 20 }, { content: "Dark on a faint scrim", fill: "#222222", fontSize: 14 });
+  put(hero, photo);
+  put(root, hero, title, scrim, dim);
+  const f = lintScreen(model(root, hero, photo, title, scrim, dim));
+  assert.deepEqual(f.filter((x) => x.rule === "contrast"), []);
+});
+
+test("a text cut by a small card is reported; rows below a scroll fold are not", async () => {
+  const { lintScreen } = await import("../src/lint/rules.js");
+  const root = mk("root", "frame", { x: 0, y: 0, w: 390, h: 844 }, { clip: true });
+  const card = mk("card", "frame", { x: 16, y: 16, w: 200, h: 40 }, { clip: true });
+  const long = mk("long", "text", { x: 24, y: 24, w: 260, h: 20 }, { content: "A label that is far too long", clipped: "partially" });
+  const row = mk("row", "text", { x: 16, y: 830, w: 200, h: 30 }, { content: "Below the fold", clipped: "partially" });
+  put(card, long);
+  put(root, card, row);
+  const f = lintScreen(model(root, card, long, row)).filter((x) => x.rule === "clipped");
+  assert.deepEqual(f.map((x) => x.id), ["long"]);
+});
+
+test("touch targets: whole words only, thin indicators and parts of big buttons are skipped", async () => {
+  const { lintScreen } = await import("../src/lint/rules.js");
+  const root = mk("root", "frame", { x: 0, y: 0, w: 390, h: 844 });
+  const nodes = [
+    mk("ind", "frame", { x: 0, y: 40, w: 80, h: 2 }, { name: "Tab indicator" }),
+    mk("fab", "frame", { x: 0, y: 60, w: 30, h: 30 }, { name: "Fabric swatch" }),
+    mk("tbl", "frame", { x: 0, y: 100, w: 30, h: 30 }, { name: "Table header" }),
+    mk("close", "frame", { x: 340, y: 10, w: 32, h: 32 }, { name: "closeButton" }),
+  ];
+  const big = mk("big", "frame", { x: 16, y: 700, w: 358, h: 48 }, { name: "Primary button" });
+  const inner = mk("inner", "frame", { x: 30, y: 710, w: 100, h: 28 }, { name: "Button content" });
+  put(big, inner);
+  put(root, ...nodes, big);
+  const f = lintScreen(model(root, ...nodes, big, inner)).filter((x) => x.rule === "touch-target");
+  assert.deepEqual(f.map((x) => x.id), ["close"]);
+});
+
+test("tokens: round trips, var() aliases, @media dark, bracket selectors, name collisions", () => {
+  const n = normalizeTokens(
+    { surface: { type: "color", value: [{ value: "#FFFFFF", theme: { mode: "light" } }, { value: "#0B0B0F", theme: { mode: "dark" } }] }, ink: { type: "color", value: "#111111" } },
+    { mode: ["light", "dark"] },
+  );
+  assert.deepEqual(diffTokens(n, renderTokens(n, "css")), { missing: [], changed: [], extra: [] });
+  assert.deepEqual(diffTokens(n, renderTokens(n, "json"), { json: true }), { missing: [], changed: [], extra: [] });
+  const one = normalizeTokens({ ink: { type: "color", value: "#111111" } }, {});
+  assert.deepEqual(diffTokens(one, renderTokens(one, "json"), { json: true }), { missing: [], changed: [], extra: [] });
+  assert.deepEqual(diffTokens(one, ":root { --white: #111111; --ink: var(--white); }").changed, []);
+  assert.doesNotThrow(() => diffTokens(n, '[data-mode="light"] { --ink: #111; }'));
+  assert.deepEqual(normalizeTokens({ "space-2": { type: "number", value: 8 }, space2: { type: "number", value: 9 } }, {}).collisions, ["space-2 and space2 → tokens.space2"]);
+  assert.match(renderTokens(normalizeTokens({ "2xl": { type: "number", value: 32 } }, {}), "react-native"), /"2xl": 32/);
+});
+
+test("lint never puts token fixes on component instances; it checks the component instead", async () => {
+  const out = await exec(`c = Insert(document, { type: "frame", name: "Chip", reusable: true, x: 0, y: -300, width: 80, height: 32, fill: "#2563EB" });
+  s2 = Insert(document, { type: "frame", name: "Chips · light", x: 1600, y: 0, width: 390, height: 844, fill: "#FFFFFF", theme: { mode: "light" } });
+  i = Insert(s2, { type: "ref", ref: c, name: "Chip", x: 16, y: 16 });
+  Print("IDS", JSON.stringify({ c, i }))`);
+  const { c, i } = JSON.parse(/IDS (.*)/.exec(out)[1]);
+  const res = text(await call(client, "lint", { filePath: file, target: "Chips · light", rules: ["raw-color"], fix: ["tokens"] }));
+  assert.match(res, /component Chip .*\(.*\): fill #2563EB is the value of \$brand/);
+  const after = await exec(`Print("F", JSON.stringify([Get(${JSON.stringify(c)}).fill, Get(${JSON.stringify(i)}).fill]))`);
+  const [compFill] = JSON.parse(/F (.*)/.exec(after)[1]);
+  assert.equal(compFill, "$brand", "the component was fixed, so every instance follows");
+});
+
+test("contrast over a gradient is measured on the render when one is available", async () => {
+  const { lintScreen } = await import("../src/lint/rules.js");
+  const root = mk("root", "frame", { x: 0, y: 0, w: 390, h: 844 }, { fill: { type: "gradient_linear", stops: [] } });
+  const t = mk("t", "text", { x: 16, y: 16, w: 200, h: 20 }, { content: "On a gradient", fill: "#7FB6EA", fontSize: 10 });
+  put(root, t);
+  const m = model(root, t);
+  assert.deepEqual(lintScreen(m).filter((x) => x.rule === "contrast"), [], "unknown without a render");
+  const light = lintScreen(m, { sampleBg: () => ({ r: 10, g: 99, b: 181, a: 1 }) }).filter((x) => x.rule === "contrast");
+  assert.match(light[0].message, /2\.\d:1 .*measured on the render/);
+  const dark = lintScreen(m, { sampleBg: () => ({ r: 14, g: 21, b: 35, a: 1 }) }).filter((x) => x.rule === "contrast");
+  assert.deepEqual(dark, [], "8.5:1 on the real dark gradient passes");
 });
