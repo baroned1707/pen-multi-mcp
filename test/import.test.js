@@ -122,3 +122,30 @@ test("round trip: sticky heading mid page, dark inline code, padded input; the p
   const lint = text(await call(client, "lint", { filePath: file, target: id, rules: ["covered"] }));
   assert.match(lint, /0 findings/);
 });
+
+test("import_ui: sizes on the one token with that value, and marked elements as instances of their component", async () => {
+  await call(client, "execute", {
+    filePath: file,
+    input: `SetVariables({ r12: { type: "number", value: 12 }, "text-lg": { type: "number", value: 18 }, s18: { type: "number", value: 18 } });
+pill = Insert(document, { type: "frame", name: "C/Pill", reusable: true, x: 0, y: -900, width: 80, height: 28, layout: "horizontal", justifyContent: "center", alignItems: "center", fill: "#2563EB", cornerRadius: 14 });
+Insert(pill, { type: "text", name: "Label", content: "New", fill: "#FFFFFF", fontFamily: "Arial", fontSize: 13 });`,
+  });
+  fs.writeFileSync(
+    path.join(dir, "tokens.html"),
+    `<body style="margin:0;font-family:Arial;background:#fff">
+<div style="margin:16px;padding:16px;border-radius:12px;background:#F3F4F6"><p style="margin:0;font-size:18px">Card title</p></div>
+<div data-pen="C/Pill" style="margin:16px;width:80px;height:28px;border-radius:14px;background:#2563EB;color:#fff;font-size:13px;display:flex;align-items:center;justify-content:center"><span>Hot</span></div>
+</body>`,
+  );
+  const res = await call(client, "import_ui", { filePath: file, source: { kind: "web", url: `file://${path.join(dir, "tokens.html")}` }, name: "Tokens" });
+  assert.ok(!res.isError, text(res));
+  assert.match(text(res), /1 component instances/);
+  const id = /"Tokens" \((\S+)\)/.exec(text(res))[1];
+  const nodes = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (c) => ({ type: c.type, name: c.name, cornerRadius: c.cornerRadius, ref: c.ref, descendants: c.descendants }))))` })))[1]);
+  assert.ok(nodes.some((n) => n.cornerRadius === "$r12"), `radius 12 on its token: ${JSON.stringify(nodes)}`);
+  const inst = nodes.find((n) => n.type === "ref");
+  assert.ok(inst, "the marked element is an instance");
+  assert.deepEqual(Object.values(inst.descendants ?? {}), [{ content: "Hot" }], "its text is an override");
+  const texts = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "text" ? [n.content, n.fontSize] : undefined)))` })))[1]);
+  assert.ok(texts.some(([c, s]) => c === "Card title" && s === 18), "18 is shared by two tokens, so it stays a number");
+});

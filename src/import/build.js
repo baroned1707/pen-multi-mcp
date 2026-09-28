@@ -33,11 +33,14 @@ function alignOf(el) {
   return el.textAlign === "center" || el.textAlign === "right" ? el.textAlign : "left";
 }
 
-const textStyle = (el, tokens) => {
+// A number as the one token with that value, else the number.
+const numOrToken = (v, numbers) => numbers?.get(r2(v)) ?? r2(v);
+
+const textStyle = (el, tokens, numbers) => {
   const out = {};
   const fg = tokenOrHex(el.fg, tokens);
   if (fg) out.fill = fg;
-  if (el.fontSize) out.fontSize = r2(el.fontSize);
+  if (el.fontSize) out.fontSize = numOrToken(el.fontSize, numbers);
   if (el.fontWeight) out.fontWeight = String(el.fontWeight);
   if (el.fontFamily) out.fontFamily = el.fontFamily;
   if (el.lineHeight && el.fontSize) out.lineHeight = r2(el.lineHeight / el.fontSize);
@@ -72,7 +75,7 @@ function textPlacement(el, origin) {
  * Elements that paint nothing are dropped and their children re-parented to the nearest kept
  * ancestor, so the imported tree is only as deep as what is visible.
  */
-export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight } = {}) {
+export function buildSpecs(snapshot, { tokens = [], numbers = null, components = null, images = null, frameHeight } = {}) {
   const byIndex = new Map(snapshot.elements.map((el) => [el.i, el]));
   const kept = new Map(); // element index -> spec key (frames only: a text node cannot hold children)
   const specs = [];
@@ -104,8 +107,34 @@ export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight }
   const flushPending = (el) => {
     while (pending.length && !(el && isInside(el, pending.at(-1).owner))) specs.push(pending.pop().spec);
   };
+  // Elements whose marker names a design component become instances; what is inside them is the
+  // component's (texts become overrides when they line up with the component's texts).
+  const instanceOf = new Map(); // element index -> component
+  const insideInstance = (el) => {
+    for (let p = el.parent !== undefined ? byIndex.get(el.parent) : null; p; p = p.parent !== undefined ? byIndex.get(p.parent) : null) if (instanceOf.has(p.i)) return p;
+    return null;
+  };
   for (const el of snapshot.elements) {
     flushPending(el);
+    if (insideInstance(el)) continue;
+    const comp = el.marker && components?.get(String(el.marker).replace(/^.*:id\//, "").replace(/^pen:/, ""));
+    if (comp) {
+      const { key: parent, box: pbox } = keyOf(el);
+      const own = boxOf(el);
+      instanceOf.set(el.i, comp);
+      const props = { type: "ref", ref: comp.id, name: nameOf(el), x: r2(own.x - pbox.x), y: r2(own.y - pbox.y), width: r2(own.w), height: r2(own.h) };
+      const texts = snapshot.elements.filter((c) => c.text && !c.icon && c.i !== el.i && isInside(c, el.i)).map((c) => c.text);
+      if (el.text && !texts.length) texts.push(el.text);
+      if (texts.length && texts.length === comp.texts.length) {
+        const descendants = {};
+        comp.texts.forEach((t, i) => {
+          if (t.content !== texts[i]) descendants[t.id] = { content: texts[i] };
+        });
+        if (Object.keys(descendants).length) props.descendants = descendants;
+      }
+      specs.push({ key: `n${seq++}`, parent, props });
+      continue;
+    }
     const bg = tokenOrHex(el.bg, tokens);
     const border = el.borderWidth > 0 ? tokenOrHex(el.borderColor, tokens) : null;
     const visual = VISUAL_TAGS.test(el.tag ?? "") || el.icon;
@@ -120,7 +149,7 @@ export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight }
     const name = nameOf(el);
     if (text && !bg && !border && !visual) {
       const props = { type: "text", name, content: text, textGrowth: "fixed-width", ...textPlacement({ ...el, box: own, contentBox: moved(el.contentBox), textBox: moved(el.textBox) }, pbox) };
-      Object.assign(props, textStyle(el, tokens));
+      Object.assign(props, textStyle(el, tokens, numbers));
       pending.push({ owner: el.i, spec: { key, parent, props } });
       continue; // not kept: its children (inline code, inputs) go to the nearest frame
     }
@@ -130,7 +159,7 @@ export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight }
       const url = images(el);
       if (url) props.fill = { type: "image", url, mode: "fill" };
     }
-    if (el.radius) props.cornerRadius = r2(Math.min(el.radius, w / 2, h / 2));
+    if (el.radius) props.cornerRadius = numOrToken(Math.min(el.radius, w / 2, h / 2), numbers);
     if (border) {
       props.stroke = border;
       props.strokeWidth = r2(el.borderWidth);
@@ -140,7 +169,7 @@ export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight }
     if (text) {
       // A painted element with its own text: the text goes inside it.
       const tprops = { type: "text", name: `${name} text`, content: text, textGrowth: "fixed-width", ...textPlacement({ ...el, box: own, contentBox: moved(el.contentBox), textBox: moved(el.textBox) }, own) };
-      Object.assign(tprops, textStyle(el, tokens));
+      Object.assign(tprops, textStyle(el, tokens, numbers));
       specs.push({ key: `n${seq++}`, parent: key, props: tprops });
     }
   }

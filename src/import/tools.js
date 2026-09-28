@@ -3,9 +3,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { ReadError } from "../design/read.js";
+import { buildModel } from "../design/model.js";
+import { ReadError, readSubtree } from "../design/read.js";
 import { colorTokens } from "../lint/rules.js";
 import { readPng } from "../verify/image.js";
+import { numberTokens } from "../verify/reverse.js";
 import { slug } from "../verify/tools.js";
 import { buildSpecs, imageCropper, safeName, snippets, tokenOrHex } from "./build.js";
 
@@ -17,6 +19,39 @@ const ago = (iso) => {
 };
 
 export function registerImportTools({ tool, z, route, design, executeSnippet, optionalFilePath, capture, source, conventions, saver }) {
+  /** What is left to clean up in an import: raw colors and sizes no token has. */
+  function cleanliness(specs) {
+    const raw = (v) => typeof v === "string" && v.startsWith("#");
+    const colors = specs.filter((x) => raw(x.props.fill) || raw(x.props.stroke)).length;
+    const sizes = specs.filter((x) => typeof x.props.fontSize === "number" || typeof x.props.cornerRadius === "number").length;
+    return `Not on tokens yet: ${colors} node(s) with raw colors, ${sizes} with raw font sizes or radii (no token has those values). Components: elements whose marker names a design component (data-pen="<component id or name>") come in as its instances.`;
+  }
+
+  /**
+   * Components the snapshot's markers name (by id or exact name): Map(marker -> { id, texts }),
+   * texts being the component's visible text nodes in order, for instance overrides.
+   */
+  async function markedComponents(target, snapshot) {
+    const markers = new Set(snapshot.elements.map((e) => e.marker && String(e.marker).replace(/^.*:id\//, "").replace(/^pen:/, "")).filter(Boolean));
+    const out = new Map();
+    if (!markers.size) return out;
+    const { analysis } = await design.analysisOf(target);
+    for (const c of analysis.components) {
+      const key = markers.has(c.id) ? c.id : markers.has(c.name) ? c.name : null;
+      if (!key) continue;
+      const model = buildModel(await readSubtree(design.reader(target), c.id));
+      const texts = [];
+      const walk = (n) => {
+        if (n.hidden) return;
+        if (n.type === "text") texts.push({ id: n.id, content: n.resolved?.content ?? n.content });
+        n.children.forEach(walk);
+      };
+      walk(model.root);
+      out.set(key, { id: c.id, name: c.name, texts });
+    }
+    return out;
+  }
+
   tool(
     "import_ui",
     "Rebuild a running screen of the app as an editable frame in the .pen (code → design): painted boxes become frames (fill, radius, border), texts become text nodes (content, size, weight, family, color, line height), images and icons become crops of the screenshot, placed where the UI draws them; colors that equal a document token use the token. Use it to bring an implemented screen into the design, to start a design from existing code, or to compare side by side. Sources as for verify (web, probe, native). The new frame is placed right of the existing content.",
@@ -53,7 +88,9 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
       const cropper = images && shot ? imageCropper({ img: shot, scale, penFile: target.file, prefix }) : null;
       const vw = snapshot.viewport?.w ?? width;
       const vh = shot ? shot.height / scale : snapshot.viewport?.h ?? height;
-      const specs = buildSpecs(snapshot, { tokens, images: cropper, frameHeight: vh });
+      const numbers = numberTokens(ctx.variables);
+      const components = await markedComponents(target, snapshot);
+      const specs = buildSpecs(snapshot, { tokens, numbers, components, images: cropper, frameHeight: vh });
       const frameName = safeName(name ?? `${snapshot.url ? new URL(snapshot.url).pathname.replace(/^\/+/, "") || "home" : snapshot.platform ?? "screen"} (from code)`);
       const pageBg = tokenOrHex(snapshot.pageBg, tokens) ?? "#FFFFFF";
       const screen = { type: "frame", name: frameName, x: Math.ceil(ctx.right + 200), y: 0, width: Math.round(vw), height: Math.round(vh), layout: "none", clip: true, fill: pageBg, ...(axis ? { theme: { [axis]: theme } } : {}) };
@@ -70,7 +107,8 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
       }
       return design.wrap(target, [
         `Imported ${created} nodes into a new frame "${frameName}" (${rootId}) at x ${screen.x}, ${Math.round(vw)}×${Math.round(vh)}.`,
-        `${specs.filter((s) => s.props.type === "text").length} texts, ${specs.filter((s) => s.props.fill?.type === "image").length} image crops, ${specs.filter((s) => typeof s.props.fill === "string" && s.props.fill.startsWith("$")).length} fills on tokens${axis ? `, drawn in ${axis} ${theme}` : ""}.`,
+        `${specs.filter((s) => s.props.type === "text").length} texts, ${specs.filter((s) => s.props.fill?.type === "image").length} image crops, ${specs.filter((s) => typeof s.props.fill === "string" && s.props.fill.startsWith("$")).length} fills on tokens, ${specs.filter((s) => s.props.type === "ref").length} component instances${axis ? `, drawn in ${axis} ${theme}` : ""}.`,
+        cleanliness(specs),
         ...(snapshot.truncated ? ["The page has more elements than a capture keeps (6,000): the import is partial; import a narrower state or screen."] : []),
         "Positions are absolute (layout none): turn sections into auto layout where the design should flow, name the layers, and replace crops with icons or components where they exist. lint the frame to see what is left.",
       ]);
