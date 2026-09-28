@@ -95,7 +95,11 @@ const stripIndex = (s) => String(s ?? "").replace(/\[\d+\]/g, "");
  * inside an instance, instanceOf { id, name } (the component, located by its own marker).
  */
 export function locate(node, idx) {
-  const first = (v) => idx.markers.get(v)?.[0];
+  // The first location, and how many other places carry the same marker.
+  const first = (v) => {
+    const locs = idx.markers.get(v);
+    return locs?.length ? { ...locs[0], ...(locs.length > 1 ? { also: locs.length - 1 } : {}) } : undefined;
+  };
   const byId = first(node.id);
   if (byId) return { ...byId, how: "id" };
   // The longest marker that is the node's address or a suffix of it.
@@ -103,7 +107,7 @@ export function locate(node, idx) {
   let best = null;
   for (const [v, locs] of idx.markers) {
     const w = stripIndex(v);
-    if ((addr === w || addr.endsWith(`/${w}`)) && (!best || w.length > best.w.length)) best = { w, loc: locs[0] };
+    if ((addr === w || addr.endsWith(`/${w}`)) && (!best || w.length > best.w.length)) best = { w, loc: { ...locs[0], ...(locs.length > 1 ? { also: locs.length - 1 } : {}) } };
   }
   if (best) return { ...best.loc, how: "address" };
   const byName = node.name && first(node.name);

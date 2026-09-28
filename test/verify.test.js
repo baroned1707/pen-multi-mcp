@@ -103,6 +103,17 @@ test("drift is reported as exactly the planted differences", async () => {
   assert.deepEqual(kinds(rep, "medium"), planted.medium);
 });
 
+test("findings point at the code (file:line from markers) and name the design token; the worst come as close-ups", async () => {
+  const res = await verify({ source: { kind: "web", url: url("drift.html") } });
+  const t = text(res);
+  assert.match(t, /text color: #DC2626 in the UI, #111111 in the design .* Design token \$ink\. → [\w-]+\.html:\d+ \(\+\d+ other places with this marker\)/);
+  const images = res.content.filter((c) => c.type === "image");
+  assert.equal(images.length, 3, "three close-ups by default");
+  assert.match(t, /Finding \d+ \[high\] close-up — left: design, right: app\./);
+  const none = await verify({ source: { kind: "web", url: url("drift.html") }, crops: 0 });
+  assert.equal(none.content.filter((c) => c.type === "image").length, 0);
+});
+
 test("without markers the same differences are found, with a hint to add markers", async () => {
   const res = await verify({ source: { kind: "web", url: url("drift-nomarkers.html") } });
   const rep = report();

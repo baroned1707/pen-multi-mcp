@@ -10,7 +10,9 @@ import { captureWeb } from "./adapters/web.js";
 import { designNodes } from "./design.js";
 import { pngBuffer, readPng, resize, writePng } from "./image.js";
 import { verifyScreen } from "./pipeline.js";
-import { contactSheet, renderReport, sheetRow } from "./report.js";
+import { contactSheet, findingCrops, renderReport, sheetRow } from "./report.js";
+import { pointFindingsAtCode } from "./code.js";
+import { projectMapping } from "../mapping/index.js";
 
 const OUT_DIR = "design-verify";
 const DARK = /\b(dark|night|tối|toi|đêm)\b/i;
@@ -229,8 +231,9 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         .optional()
         .describe("Overrides: position/size px (4), sizeRatio (0.05), color ΔE (10), fontSize px (1), fontWeight (100), lineHeight px (2), radius px (2)."),
       maxLines: z.number().int().min(10).max(2000).optional().describe("Findings listed inline (default 120); the JSON has all."),
+      crops: z.number().int().min(0).max(10).optional().describe("Close-ups (design | app) of the worst findings attached as images (default 3; 0 for none)."),
     },
-    async ({ filePath: f, target: wanted, width, theme, source: src, snapshot: snapPath, tolerance, maxLines = 120 }) => {
+    async ({ filePath: f, target: wanted, width, theme, source: src, snapshot: snapPath, tolerance, maxLines = 120, crops = 3 }) => {
       if (!src && !snapPath) throw new ReadError("Pass source (to capture now) or snapshot (a capture file).");
 
       const target = await route(f);
@@ -262,6 +265,10 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       const designImg = readPng(designPng);
       const uiImg = snapshot.screenshot && fs.existsSync(snapshot.screenshot) ? readPng(snapshot.screenshot) : null;
       const result = verifyScreen({ design: d, snapshot, designImg, uiImg, tolerance });
+      // Point findings at the code (markers) and name the design tokens they concern.
+      const mapping = projectMapping({ penFile: target.file, conv: conventions(target.file), variables: model.variables, themes: model.themes });
+      const where = pointFindingsAtCode(result.findings, { model, d, snapshot, mapping });
+      if (where.unlocated) result.hints = [...(result.hints ?? []), `${where.unlocated} finding(s) have no code location (${where.reason}). Mark elements with data-pen="<node id or address>" (web) or testID/Key/accessibility id "pen:<…>" to get file:line.`];
 
       const sheetPath = uiImg ? `${outBase}.png` : null;
       if (uiImg) writePng(sheetPath, contactSheet([sheetRow({ designImg, uiImg, frame: d.frame, findings: result.findings, uiWidth: snapshot.viewport?.w })]));
@@ -294,7 +301,13 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         ),
       );
       await hooks.onVerify?.(target.file, id, { summary: result.summary }, files.report);
-      return design.wrap(target, renderReport({ meta, ...result, files, maxLines }));
+      const res = design.wrap(target, renderReport({ meta, ...result, files, maxLines }));
+      if (uiImg && crops > 0) {
+        for (const { finding, image } of findingCrops({ designImg, uiImg, frame: d.frame, findings: result.findings, uiWidth: snapshot.viewport?.w, n: crops })) {
+          res.content.push({ type: "text", text: `Finding ${finding.n} [${finding.severity}] close-up — left: design, right: app.` }, { type: "image", data: pngBuffer(image).toString("base64"), mimeType: "image/png" });
+        }
+      }
+      return res;
     },
   );
 

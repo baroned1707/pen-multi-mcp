@@ -445,3 +445,15 @@ test("a missing wrapper whose main contents are present is medium and says so", 
   assert.equal(f.severity, "medium");
   assert.match(f.message, /1 of its contents are present \(Bar\): the container itself is what differs/);
 });
+
+test("the verdict says what was not checked, so a MATCH is not read as covering it", async () => {
+  const { renderReport } = await import("../src/verify/report.js");
+  const lines = renderReport({
+    meta: { screen: "S", frameId: "x", sourceLabel: "native android", viewport: "390×844" },
+    summary: { verdict: "match", high: 0, medium: 0, low: 0, matched: 3, compared: 3, by: { marker: 3, text: 0, geometry: 0 }, score: 100 },
+    findings: [],
+    notCompared: ["font size", "font weight"],
+  });
+  assert.match(lines[2], /^Verdict: MATCH \(not checked: font size, font weight\) — 0 high/);
+  assert.match(lines[3], /A MATCH says nothing about these\./);
+});

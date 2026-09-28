@@ -1,5 +1,5 @@
 // The verify report as text for agents, and the contact sheet as an image for people.
-import { hstack, label, resize, strokeRect, vstack } from "./image.js";
+import { crop, hstack, label, resize, strokeRect, vstack } from "./image.js";
 
 const COLORS = { high: [220, 38, 38], medium: [234, 138, 0], low: [160, 160, 40] };
 const GROUPS = ["Structure", "Layout", "Color", "Typography", "Visual"];
@@ -8,9 +8,9 @@ export function renderReport({ meta, summary, findings, notCompared = [], files 
   const lines = [
     `# verify: ${meta.screen} (${meta.frameId}) vs ${meta.sourceLabel}`,
     `Viewport ${meta.viewport}${meta.theme ? ` · theme ${meta.theme}` : ""}${meta.width ? ` · design width ${meta.width}` : ""}`,
-    `Verdict: ${summary.verdict === "match" ? "MATCH" : "DIFFERS"} — ${summary.high} high, ${summary.medium} medium, ${summary.low} low · matched ${summary.matched}/${summary.compared} design nodes (marker ${summary.by.marker}, text ${summary.by.text}, content ${summary.by.content ?? 0}, geometry ${summary.by.geometry}) · score ${summary.score === null ? "n/a (image only)" : `${summary.score}%`}`,
+    `Verdict: ${summary.verdict === "match" ? "MATCH" : "DIFFERS"}${notCompared.length ? ` (not checked: ${notCompared.join(", ")})` : ""} — ${summary.high} high, ${summary.medium} medium, ${summary.low} low · matched ${summary.matched}/${summary.compared} design nodes (marker ${summary.by.marker}, text ${summary.by.text}, content ${summary.by.content ?? 0}, geometry ${summary.by.geometry}) · score ${summary.score === null ? "n/a (image only)" : `${summary.score}%`}`,
   ];
-  if (notCompared.length) lines.push(`Not compared (the source does not provide them): ${notCompared.join(", ")}`);
+  if (notCompared.length) lines.push(`Not checked because the source does not provide them: ${notCompared.join(", ")}. A MATCH says nothing about these.`);
   let shown = 0;
   for (const g of GROUPS) {
     const list = findings.filter((f) => f.group === g);
@@ -18,7 +18,8 @@ export function renderReport({ meta, summary, findings, notCompared = [], files 
     lines.push("", `## ${g}`);
     for (const f of list) {
       if (shown >= maxLines) break;
-      lines.push(`${f.n}. [${f.severity}] ${f.message}`);
+      const token = f.token ? ` Design token ${f.token.design}${f.token.code ? ` = ${f.token.code} in code` : ""}.` : "";
+      lines.push(`${f.n}. [${f.severity}] ${f.message}${token}${f.code ? ` → ${f.code}` : ""}`);
       shown++;
     }
   }
@@ -49,6 +50,22 @@ export function sheetRow({ designImg, uiImg, frame, findings, uiWidth = frame.w 
     label(target, b.x, Math.max(0, b.y - 7 * Math.max(2, Math.round(k * 1.5))), f.n, color, Math.max(2, Math.round(k * 1.5)));
   }
   return hstack([design, ui, overlay]);
+}
+
+/**
+ * Close-ups of the worst findings with a box: the design crop and the UI crop side by side, each
+ * with some margin, for up to `n` findings (high first). Returns [{ finding, image }].
+ */
+export function findingCrops({ designImg, uiImg, frame, findings, uiWidth = frame.w, n = 3, margin = 24, maxWidth = 900 }) {
+  const k = designImg.width / frame.w;
+  const ui = resize(uiImg, Math.round(uiWidth * k));
+  const rank = { high: 0, medium: 1, low: 2 };
+  const worst = findings.filter((f) => f.box && f.severity !== "low").sort((a, b) => rank[a.severity] - rank[b.severity] || a.n - b.n).slice(0, n);
+  return worst.map((f) => {
+    const b = { x: (f.box.x - margin) * k, y: (f.box.y - margin) * k, w: (f.box.w + 2 * margin) * k, h: (f.box.h + 2 * margin) * k };
+    const pair = hstack([crop(designImg, b), crop(ui, b)]);
+    return { finding: f, image: pair.width > maxWidth ? resize(pair, maxWidth) : pair };
+  });
 }
 
 export function contactSheet(rows, maxWidth) {
