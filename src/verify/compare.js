@@ -51,11 +51,15 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
       continue;
     }
     const lost = matched.unmatchedDesign.filter((n) => n.ancestors?.includes(node.id));
-    // As severe as the most important thing missing with it (a missing card hides missing texts).
-    const sev = node.kind === "box" && lost.every((n) => n.kind === "box") ? "medium" : "high";
+    const present = inside.filter((n) => matched.pairs.has(n.id));
+    // As severe as the most important thing missing with it (a missing card hides missing texts);
+    // a container whose main contents are there (a bar inside a missing wrapper) is medium.
+    const sev = (node.kind === "box" && lost.every((n) => n.kind === "box")) || (present.length && !lost.some((n) => n.kind === "text")) ? "medium" : "high";
     const what = node.kind === "text" ? `text "${String(node.text).slice(0, 60)}"` : `${node.kind} "${node.name}"`;
     const texts = lost.filter((n) => n.kind === "text").map((n) => `"${String(n.text).slice(0, 30)}"`);
-    const contents = lost.length ? ` Its ${lost.length} compared descendants are missing too${texts.length ? `, including the texts ${texts.slice(0, 6).join(", ")}${texts.length > 6 ? ", …" : ""}` : ""}.` : "";
+    const contents =
+      (lost.length ? ` Its ${lost.length} compared descendants are missing too${texts.length ? `, including the texts ${texts.slice(0, 6).join(", ")}${texts.length > 6 ? ", …" : ""}` : ""}.` : "") +
+      (present.length ? ` ${present.length} of its contents are present (${present.slice(0, 3).map((n) => n.name).join(", ")}${present.length > 3 ? ", …" : ""}): the container itself is what differs.` : "");
     add({ severity: sev, group: "Structure", kind: "missing", designId: node.id, address: node.address, box: node.box, contains: lost.map((n) => n.id), message: `missing: ${what} — ${label(node)} at ${box(node.box)} has no counterpart in the UI${node.kind === "text" ? " (no element shows this text)" : ""}.${contents}` });
   }
   const designTexts = new Set(design.nodes.filter((n) => n.kind === "text").map((n) => normText(n.text)));

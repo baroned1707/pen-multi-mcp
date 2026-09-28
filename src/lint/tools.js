@@ -135,7 +135,7 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
           d.missing.length || d.changed.length || d.extra.length ? `${d.changed.length} changed, ${d.missing.length} missing in code, ${d.extra.length} only in code.` : "In sync.",
           ...d.changed.map((x) => `- changed ${x.name}${x.theme !== "default" ? ` (${x.theme})` : ""}: design ${x.design}, code ${x.code}`),
           ...d.missing.map((x) => `- missing ${x.name}${x.theme !== "default" ? ` (${x.theme})` : ""}: design ${x.design}`),
-          ...d.extra.slice(0, 50).map((x) => `- only in code: ${x}`),
+          ...(d.extra.length ? [`- only in code (${d.extra.length}): ${d.extra.slice(0, 24).join(", ")}${d.extra.length > 24 ? ", …" : ""}`] : []),
         );
       }
       const output = renderTokens(n, format);

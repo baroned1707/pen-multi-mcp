@@ -62,7 +62,7 @@ Many agents and projects:
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "1.0.2" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "1.0.3" }, { instructions: INSTRUCTIONS });
 
 const filePath = z
   .string()
@@ -289,11 +289,17 @@ tool(
     editId: z.string().optional().describe("Id of the failed snippet to patch, from that call's failure message. Only with `edits`."),
     edits: z
       .array(
-        z.object({
-          find: z.string().describe("Exact text in the failed snippet to replace."),
-          replace: z.string(),
-          all: z.boolean().optional().describe("Replace every occurrence."),
-        }),
+        z
+          .object({
+            find: z.string().optional().describe("Exact text in the failed snippet to replace."),
+            replace: z.string().optional(),
+            old: z.string().optional().describe("Same as find."),
+            new: z.string().optional().describe("Same as replace."),
+            all: z.boolean().optional().describe("Replace every occurrence."),
+          })
+          // Agents often write { old, new }: accept it rather than fail the retry.
+          .refine((e) => (e.find ?? e.old) !== undefined && (e.replace ?? e.new) !== undefined, { message: "each edit needs find and replace" })
+          .transform((e) => ({ find: e.find ?? e.old, replace: e.replace ?? e.new, ...(e.all !== undefined ? { all: e.all } : {}) })),
       )
       .optional()
       .describe("Patches for the failed snippet identified by editId; applied in order, then the snippet re-runs."),

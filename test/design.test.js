@@ -104,7 +104,7 @@ test("ambiguous names list the candidates instead of guessing", async () => {
   const res = await call(client, "inspect", { filePath: file, target: "Home" });
   assert.equal(res.isError, true);
   assert.match(text(res), /matches 2 frames/);
-  assert.match(text(res), /Home · light → \w+/);
+  assert.match(text(res), /Home · light \(390, light\) → \w+/, "each candidate shows its width and theme");
 });
 
 test("savePath writes the spec with the .pen's hash, and flags a stale previous spec", async () => {

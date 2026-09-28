@@ -433,3 +433,15 @@ test("modern CSS colors: oklch (Tailwind v4), oklab and hsl are understood", () 
   assert.equal(toHex(parseColor("hsl(217 91% 60% / 50%)")), "#3C83F680");
   assert.equal(parseColor("oklch(none 0 0)"), null);
 });
+
+test("a missing wrapper whose main contents are present is medium and says so", () => {
+  const d = design();
+  d.nodes.push(node("shell", "shell", { x: 0, y: 780, w: 390, h: 64 }, { name: "Tab bar", fill: parseColor("#FFFFFF") }));
+  d.nodes.push(node("bar", "box", { x: 16, y: 784, w: 358, h: 56 }, { name: "Bar", fill: parseColor("#111111"), ancestors: ["shell"] }));
+  const ui = faithfulUi();
+  ui.elements.push({ i: ui.elements.length, tag: "nav", box: { x: 16, y: 784, w: 358, h: 56 }, bg: "#111111" });
+  const { findings } = run(d, ui);
+  const f = findings.find((x) => x.designId === "shell");
+  assert.equal(f.severity, "medium");
+  assert.match(f.message, /1 of its contents are present \(Bar\): the container itself is what differs/);
+});

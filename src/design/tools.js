@@ -96,7 +96,8 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
    * Resolves a target: an exact frame id or name; else any node id that exists; else a unique
    * screen code / partial name. Ambiguous or unknown targets list candidates instead of guessing.
    */
-  const framesOf = (analysis) => analysis.matrix.rows.flatMap((r) => Object.values(r.cells).flat().map((c) => ({ ...c, row: r })));
+  const framesOf = (analysis) => analysis.matrix.rows.flatMap((r) => Object.entries(r.cells).flatMap(([w, cs]) => cs.map((c) => ({ ...c, width: w, row: r }))));
+  const variant = (c) => (c.width || c.theme ? ` (${[c.width, c.theme].filter(Boolean).join(", ")})` : "");
 
   async function resolveTarget(target, wanted, { refreshed = false } = {}) {
     // A node id is read directly; the document-wide analysis is only used if already cached, so
@@ -121,7 +122,7 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
     const loose = exact.length ? exact : frames.filter((c) => c.row.code?.toLowerCase() === lower || c.name.toLowerCase().includes(lower));
     if (loose.length === 1) return { id: loose[0].id, frame: loose[0], analysis };
     if (loose.length > 1) {
-      throw new ReadError(`"${wanted}" matches ${loose.length} frames; pass one id:\n` + loose.slice(0, 30).map((c) => `- ${c.name} → ${c.id}`).join("\n"));
+      throw new ReadError(`"${wanted}" matches ${loose.length} frames; pass one id (or width/theme where the tool takes them):\n` + loose.slice(0, 30).map((c) => `- ${c.name}${variant(c)} → ${c.id}`).join("\n"));
     }
     if (!refreshed) return resolveTarget(target, wanted, { refreshed: true }); // the document may have changed
     const words = lower.split(/[\s·—-]+/).filter((w) => w.length > 1);

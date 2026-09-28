@@ -101,7 +101,7 @@ test("tokens: css with a dark block, other formats, compare with code, refuse to
   assert.match(diff, /changed brand: design #2563EB, code #1D4ED8/);
   assert.match(diff, /missing space: design 16/);
   assert.doesNotMatch(diff, /brand \(dark\)/, "an unthemed token is compared once");
-  assert.match(diff, /only in code: legacy/);
+  assert.match(diff, /only in code \(1\): legacy/);
   const refused = await call(client, "tokens", { filePath: file, savePath: "theme.css" });
   assert.equal(refused.isError, true);
 });

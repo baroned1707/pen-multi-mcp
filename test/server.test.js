@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { call, connect, countNodes, rect, text } from "./helpers.js";
@@ -176,4 +177,14 @@ test("a server whose host dies without closing stdin exits and releases its lock
   if (survived) process.kill(serverPid, "SIGKILL");
   assert.equal(survived, false, "the orphaned server exited");
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test("execute retries accept edits written as { old, new }", async () => {
+  const c = await connect({ home: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pen-multi-edits-")), "home"), cwd: os.tmpdir(), env: { PEN_CLI_PATH: fileURLToPath(new URL("./fake-cli.mjs", import.meta.url)), PEN_MULTI_PREWARM: "0" } });
+  try {
+    const res = await call(c, "execute", { filePath: path.join(os.tmpdir(), `edits-${process.pid}.pen`), editId: "nope", edits: [{ old: "a", new: "b" }] });
+    assert.doesNotMatch(text(res), /Required at edits\[0\]/);
+  } finally {
+    await c.close();
+  }
 });

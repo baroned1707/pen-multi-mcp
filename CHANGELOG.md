@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.3 — 2026-09-28
+
+From watching the trading-agent session use it:
+- execute retries accept `edits` written as `{ old, new }` (agents wrote it that way three times, each costing a failed call).
+- ambiguous screen names list each candidate's width and theme.
+- verify: a missing wrapper whose main contents are present is medium and says the container is what differs.
+- tokens compare: code-only tokens are listed on one line.
+
 ## 1.0.2 — 2026-09-28
 
 - A server whose host dies without closing stdin (crash, kill -9) notices it is re-parented and shuts down within ~2 s, releasing its file locks; shutdown never takes longer than 10 s (`PEN_MULTI_SHUTDOWN_TIMEOUT_MS`). Found an orphaned server that had held on for 11 hours.
