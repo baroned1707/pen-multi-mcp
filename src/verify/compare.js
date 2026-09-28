@@ -102,7 +102,10 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
     }
 
     // Layout. Text line boxes differ by platform, so texts compare their top-left (and width only when fixed).
-    const d = node.box, u = el.box;
+    // A text's position is where its line is drawn (the UI element may be a wider block or a
+    // padded button), compared at the anchor its alignment implies; its width is the block's.
+    const isText = node.kind === "text";
+    const d = node.box, u = isText && el.textBox ? el.textBox : el.box;
     const posTol = node.kind === "text" ? tol.position + 2 : tol.position;
     // Relative to the nearest matched ancestor: a child that moved with its parent is not reported again.
     const anc = (node.ancestors ?? []).map((id) => [byId.get(id), matched.pairs.get(id)]).find(([, p]) => p);
@@ -117,18 +120,26 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
     // elements at the same margin, not the same x.
     const fw = design.frame.w, vw = viewportW ?? fw;
     const anchors = [u.x - d.x - ax, u.x + u.w - vw - (d.x + d.w - fw), u.x + u.w / 2 - vw / 2 - (d.x + d.w / 2 - fw / 2)];
+    if (isText && el.textBox) {
+      // The line's left, center or right edge against the design text box's, per its alignment.
+      const line = el.textBox;
+      const at = node.align === "center" ? line.x + line.w / 2 - (d.x + d.w / 2) : node.align === "right" ? line.x + line.w - (d.x + d.w) : line.x - d.x;
+      anchors.splice(0, anchors.length, at - ax, at - ax - (vw - fw), at - ax - (vw - fw) / 2);
+    }
     const dx = anchors.reduce((best, v) => (Math.abs(v) < Math.abs(best) ? v : best));
     const checkW = node.kind !== "text" || node.fixedWidth;
     const checkH = node.kind !== "text";
     const sizeTol = (v) => Math.max(tol.size, v * tol.sizeRatio);
     // Same left and right margins on a wider screen is a stretched (fill) element, not a size change.
     const stretched = Math.abs(u.x - d.x) <= tol.position && Math.abs(vw - (u.x + u.w) - (fw - (d.x + d.w))) <= tol.position;
-    const dw = stretched ? 0 : u.w - d.w, dh = u.h - d.h;
+    const wide = isText ? el.box : u; // a fixed-width text compares with its block's width
+    const dw = stretched ? 0 : wide.w - d.w, dh = u.h - d.h;
     const big = (dv, v) => Math.abs(dv) > Math.max(8, v * 0.2);
+    const shownSize = isText ? `${r1(wide.w)} wide` : `${r1(u.w)}×${r1(u.h)}`, wantSize = isText ? `${r1(d.w)} wide` : `${r1(d.w)}×${r1(d.h)}`;
     if ((checkW && big(dw, d.w)) || (checkH && big(dh, d.h))) {
-      add({ ...base, severity: "high", group: "Layout", kind: "size", expected: d, actual: u, message: `size: ${r1(u.w)}×${r1(u.h)} in the UI, ${r1(d.w)}×${r1(d.h)} in the design — ${who}.` });
+      add({ ...base, severity: "high", group: "Layout", kind: "size", expected: d, actual: u, message: `size: ${shownSize} in the UI, ${wantSize} in the design — ${who}.` });
     } else if ((checkW && Math.abs(dw) > sizeTol(d.w)) || (checkH && Math.abs(dh) > sizeTol(d.h))) {
-      add({ ...base, severity: "medium", group: "Layout", kind: "size", expected: d, actual: u, message: `size: ${r1(u.w)}×${r1(u.h)} in the UI, ${r1(d.w)}×${r1(d.h)} in the design (Δw ${r1(dw)}, Δh ${r1(dh)}) — ${who}.` });
+      add({ ...base, severity: "medium", group: "Layout", kind: "size", expected: d, actual: u, message: `size: ${shownSize} in the UI, ${wantSize} in the design (Δw ${r1(dw)}${isText ? "" : `, Δh ${r1(dh)}`}) — ${who}.` });
     }
     if (Math.abs(dx) > posTol || Math.abs(dy) > posTol) {
       const rel = anc ? ` relative to ${anc[0].name}` : "";

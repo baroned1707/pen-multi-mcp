@@ -39,11 +39,24 @@ function isSnapshotFile(file) {
 const describeSource = (src) =>
   src.kind === "web" ? `web ${src.url}` : src.kind === "image" ? `image ${src.path}` : `${src.kind} ${src.platform}${src.device ? ` ${src.device}` : ""}${src.deepLink ? ` ${src.deepLink}` : ""}`;
 
-export function registerVerifyTools({ tool, z, route, design, withMachineLock, optionalFilePath, ok }) {
+export function registerVerifyTools({ tool, z, route, design, withMachineLock, optionalFilePath, ok, conventions }) {
+  // The page a screen is served at: .pen-multi.json { baseUrl, routes: { "<screen name, code or frame name>": "/path" } }.
+  const target0 = (f) => route(f);
+  async function routeUrl(targetPromise, wanted) {
+    const target = await targetPromise;
+    const conv = conventions(target.file);
+    const { frame } = await design.resolveTarget(target, wanted, { refreshed: true }).catch(() => ({}));
+    const keys = [wanted, frame?.name, frame?.row?.screen, frame?.row?.code].filter(Boolean);
+    const hit = keys.map((k) => conv.routes?.[k]).find(Boolean);
+    if (!hit) throw new ReadError(`source.url is missing and .pen-multi.json has no route for ${keys.map((k) => `"${k}"`).join(" / ")}; pass url, or add { "baseUrl": "http://localhost:5173", "routes": { "${frame?.row?.screen ?? wanted}": "/path" } } next to the .pen.`);
+    if (/^https?:/i.test(hit)) return hit;
+    if (!conv.baseUrl) throw new ReadError(`.pen-multi.json routes "${hit}" but has no baseUrl.`);
+    return new URL(hit, conv.baseUrl).toString();
+  }
   const source = z
     .object({
       kind: z.enum(["web", "probe", "native", "image"]).describe("web: a URL in headless Chromium; probe: a React Native/Expo dev build running <PenProbe>; native: any Android/iOS app via uiautomator/maestro; image: a screenshot file."),
-      url: z.string().optional().describe("web: the page to load (the agent starts the dev server)."),
+      url: z.string().optional().describe("web: the page to load (the agent starts the dev server). verify can omit it when .pen-multi.json maps the screen to a route."),
       steps: z.array(z.record(z.string(), z.any())).optional().describe('web: actions before capturing, e.g. [{ "click": "text=Login" }, { "fill": ["#email", "a@b.c"] }, { "waitFor": ".list" }, { "wait": 500 }, { "press": "Enter" }, { "eval": "..." }].'),
       fullPage: z.boolean().optional().describe("web: capture the whole scrolling page (default true)."),
       platform: z.enum(["ios", "android"]).optional().describe("probe/native: the device platform."),
@@ -169,6 +182,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
     },
     async ({ filePath: f, target: wanted, width, theme, source: src, snapshot: snapPath, tolerance, maxLines = 120 }) => {
       if (!src && !snapPath) throw new ReadError("Pass source (to capture now) or snapshot (a capture file).");
+      if (src?.kind === "web" && !src.url) src = { ...src, url: await routeUrl(target0(f), wanted) };
       const target = await route(f);
       const run = design.reader(target);
       const { id, theme: frameTheme } = await pickFrame(target, wanted, { width, theme });
@@ -262,4 +276,5 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       return res;
     },
   );
+  return { capture, source };
 }

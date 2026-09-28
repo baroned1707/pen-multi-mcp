@@ -151,6 +151,7 @@ export async function snapshotElements(rootFiber, { flatten, processColor, measu
       fg: isText || icon ? color(s.color ?? "black") : undefined,
       icon: icon || undefined,
       fontSize: isText ? (s.fontSize ?? 14) : undefined,
+      fontFamily: isText ? s.fontFamily : undefined,
       fontWeight: isText ? (weightOf(s.fontWeight) ?? 400) : undefined,
       lineHeight: isText ? s.lineHeight : undefined,
       radius: s.borderRadius ?? s.borderTopLeftRadius,

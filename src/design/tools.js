@@ -108,7 +108,8 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
         const frame = cached ? framesOf(cached.analysis).find((c) => c.id === wanted) ?? null : null;
         return { id: wanted, frame, analysis: cached?.analysis ?? null, raw };
       } catch (err) {
-        if (!/can't find node|not found|does not exist/i.test(err.message)) throw err;
+        // A name that looks like an id: Get resolves names too, and may find several.
+        if (!/can't find node|not found|does not exist|multiple descendants/i.test(err.message)) throw err;
       }
     }
     const { analysis } = await analysisOf(target, { refresh: refreshed });

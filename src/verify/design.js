@@ -78,6 +78,7 @@ export function designNodes(model) {
           box: { ...n.abs },
           text: kind === "text" ? String(r.content ?? n.content) : undefined,
           fixedWidth: kind === "text" ? /^fixed/.test(n.textGrowth ?? "") : undefined,
+          align: kind === "text" ? (r.textAlign ?? n.textAlign ?? "left") : undefined,
           // A text's and an icon's fill is the color of its glyphs, not a background.
           fill: kind === "text" || n.type === "icon" ? undefined : colorOf(n.fill, r.fill),
           color: kind === "text" || n.type === "icon" ? colorOf(n.fill, r.fill) : undefined,

@@ -58,6 +58,7 @@ It can run next to the official `pencil` server.
 |---|---|
 | `read_skill`, `get_style` | Same as the official server (cached; no design file needed) |
 | `overview`, `inspect` | Design context: the whole document, and one screen as data (see below) |
+| `import_ui`, `sync_status` | Code → design: rebuild a running screen as a frame; which screens are verified, stale or never checked |
 | `lint`, `tokens` | Design-file quality checks with safe fixes; design tokens as CSS / Tailwind / JSON / React Native, diffed against code |
 | `verify`, `capture`, `contact_sheet` | Check the running implementation against the design on web, React Native, native Android/iOS or a screenshot (see below) |
 | `execute` | Run a snippet against `filePath` (or the app's active document); supports `editId` + `edits` retries |
@@ -115,6 +116,14 @@ The web capture scrolls through the page first (so scroll-revealed content is sh
 `capture` stores a snapshot on its own (to verify again later with `snapshot`, or to look at what the UI renders); `contact_sheet` puts several verify reports into one image and returns it inline.
 
 The browser is Playwright's Chromium if installed (`npx playwright install chromium`), else Google Chrome, else `PEN_MULTI_BROWSER`. `native` needs `adb` or `maestro` (+ Xcode's `simctl`); `PEN_MULTI_ADB`, `PEN_MULTI_XCRUN` and `PEN_MULTI_MAESTRO` point at other binaries. pen-multi never starts the app, dev server or simulator: pass a running URL or device.
+
+## Code → design: `import_ui`, `sync_status`, routes
+
+`import_ui` rebuilds a running screen (web URL, pen-probe, native device) as an editable frame in the .pen: painted boxes become frames, texts become text nodes with their font, color and alignment, images and icons become crops of the screenshot, and colors equal to a document token use the token. Importing a page and verifying the new frame against the same page gives MATCH.
+
+`sync_status` lists every screen × width × theme with its route, its last `verify` verdict and age, and whether the design changed since (stale), then the `verify` calls to run next.
+
+Routes live in `.pen-multi.json` next to the `.pen`: `{ "baseUrl": "http://localhost:5173", "routes": { "Checkout": "/checkout" } }`. With them, `verify({ target: "Checkout", source: { kind: "web" } })` needs no URL.
 
 ## Design quality: `lint` and `tokens`
 

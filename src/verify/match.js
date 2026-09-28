@@ -57,10 +57,12 @@ function resolveMarker(value, design, byId) {
 export function match(design, ui) {
   const byId = new Map(design.nodes.map((n) => [n.id, n]));
   const pairs = new Map();
-  const usedUi = new Set();
+  // A UI element can stand for two design nodes: a text, and the box around it (a <button>Pay</button>
+  // is both the button and its label). Track the two roles separately.
+  const usedAsText = new Set(), usedAsBox = new Set();
   const take = (node, el, how) => {
     pairs.set(node.id, { el, how });
-    usedUi.add(el.i);
+    (node.kind === "text" ? usedAsText : usedAsBox).add(el.i);
   };
   const markerMisses = [];
 
@@ -97,10 +99,10 @@ export function match(design, ui) {
   const candidates = [];
   for (const node of design.nodes) {
     if (node.kind !== "text" || pairs.has(node.id)) continue;
-    for (const el of byText.get(normText(node.text)) ?? []) if (!usedUi.has(el.i)) candidates.push({ node, el, d: dist(node.box, el.box) });
+    for (const el of byText.get(normText(node.text)) ?? []) if (!usedAsText.has(el.i)) candidates.push({ node, el, d: dist(node.box, el.box) });
   }
   candidates.sort((a, b) => a.d - b.d);
-  for (const c of candidates) if (!pairs.has(c.node.id) && !usedUi.has(c.el.i)) take(c.node, c.el, "text");
+  for (const c of candidates) if (!pairs.has(c.node.id) && !usedAsText.has(c.el.i)) take(c.node, c.el, "text");
 
   // 3. Containers by content: a design container whose texts were matched maps to the UI element
   // enclosing those texts (their common ancestor, or the ancestor whose size is closest).
@@ -121,7 +123,7 @@ export function match(design, ui) {
     const area = node.box.w * node.box.h;
     let best = null;
     for (const el of common) {
-      if (usedUi.has(el.i)) continue;
+      if (usedAsBox.has(el.i)) continue;
       const ratio = (el.box.w * el.box.h) / area;
       if (ratio < 0.5 || ratio > 2) continue;
       const score = Math.abs(Math.log(ratio));
@@ -138,18 +140,19 @@ export function match(design, ui) {
   for (const node of design.nodes) {
     if (node.kind === "text" || pairs.has(node.id)) continue;
     for (const el of ui.elements) {
-      if (usedUi.has(el.i)) continue;
+      if (usedAsBox.has(el.i)) continue;
       const score = Math.max(...shifts.map((sx) => iou({ ...node.box, x: node.box.x + sx }, el.box)), extra ? iou({ ...node.box, w: node.box.w + extra }, el.box) : 0);
       if (score >= 0.6) overlaps.push({ node, el, score });
     }
   }
   overlaps.sort((a, b) => b.score - a.score);
-  for (const o of overlaps) if (!pairs.has(o.node.id) && !usedUi.has(o.el.i)) take(o.node, o.el, "geometry");
+  for (const o of overlaps) if (!pairs.has(o.node.id) && !usedAsBox.has(o.el.i)) take(o.node, o.el, "geometry");
 
   return {
     pairs,
     unmatchedDesign: design.nodes.filter((n) => !pairs.has(n.id)),
-    unmatchedUi: ui.elements.filter((el) => !usedUi.has(el.i)),
+    // Unmatched: elements paired in no role; a text element paired only as a box still shows unmatched text.
+    unmatchedUi: ui.elements.filter((el) => !usedAsText.has(el.i) && !(usedAsBox.has(el.i) && !el.text)),
     markerMisses,
   };
 }

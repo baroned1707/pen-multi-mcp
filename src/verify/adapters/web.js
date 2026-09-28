@@ -140,6 +140,12 @@ function collect(limit) {
     });
   const owned = new Set(); // elements whose text belongs to an ancestor's paragraph
 
+  const textRect = (el, dx, dy) => {
+    const range = el.ownerDocument.createRange();
+    range.selectNodeContents(el);
+    const t = range.getBoundingClientRect();
+    return t.width > 0 && t.height > 0 ? { x: t.left + dx, y: t.top + dy, w: t.width, h: t.height } : undefined;
+  };
   const visit = (el, ox = 0, oy = 0) => {
     if (out.length >= limit) return;
     const cs = gcs(el);
@@ -195,12 +201,16 @@ function collect(limit) {
         truncated: truncated || undefined,
         fixed: cs.position === "fixed" || cs.position === "sticky" || undefined,
         box: { x: r.left + sx + ox, y: r.top + sy + oy, w: r.width, h: r.height },
+        // Where the text itself is drawn inside the box (centered button labels, padded cards).
+        textBox: text && !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) ? textRect(el, sx + ox, sy + oy) : undefined,
         frame: el.tagName === "IFRAME" ? (el.contentDocument ? "same-origin" : "cross-origin") : undefined,
         bg: cs.backgroundColor,
         // Text color, or the color an icon paints (SVG fill, icon-font glyph).
         fg: text ? cs.color : el.tagName === "svg" ? svgColor(el) : ICON_FONT.test(cs.fontFamily) ? cs.color : undefined,
         icon: el.tagName === "svg" || ICON_FONT.test(cs.fontFamily) || undefined,
         fontSize: text ? num(cs.fontSize) : undefined,
+        fontFamily: text ? cs.fontFamily.split(",")[0].replace(/["']/g, "").trim() : undefined,
+        textAlign: text ? ({ start: "left", end: "right", justify: "left", "-webkit-center": "center" }[cs.textAlign] ?? cs.textAlign) : undefined,
         fontWeight: text ? num(cs.fontWeight) : undefined,
         lineHeight: text ? lh : undefined,
         radius: num(cs.borderTopLeftRadius),
