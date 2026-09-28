@@ -5,6 +5,7 @@
 - `port`: a durable queue for porting a design screen by screen until MATCH (plan / next with claims for parallel agents / done only on a fresh MATCH / skip / block / status); verify records each run on it.
 - `verify` / `capture` web sources take `mocks` (fixture answers for matching requests, with status, delay and files) to show a screen's state without a backend; `.pen-multi.json` `states` declare route, steps, mocks and deep link per screen state.
 - `skills/pen-port`: a Claude Code skill that drives the loop, with subagents for large ports.
+- Machine-wide locks also exclude callers inside one process, so parallel `port next` calls from one server never get the same item. A filtered `plan` keeps the rest of the queue and its `maxAttempts`; raising `maxAttempts` reopens items blocked for running out of attempts. A state frame never borrows its screen's states entry. The first matching mock wins; mocks answer credentialed CORS requests and preflights; verify reports are named per frame id.
 
 ## 1.1.0 — 2026-09-28
 

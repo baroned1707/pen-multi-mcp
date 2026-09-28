@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { counts, nextItem, planQueue, recordVerify, settle } from "../src/port/queue.js";
+import { mockPattern } from "../src/verify/adapters/web.js";
 import { call, connect, text } from "./helpers.js";
 
 test("queue: plan keeps progress, next resumes a claim, leases expire, attempts block, settle", () => {
@@ -30,6 +31,29 @@ test("queue: plan keeps progress, next resumes a claim, leases expire, attempts 
   const replanned = planQueue(q, cells, { maxAttempts: 2 });
   assert.equal(replanned.items.find((i) => i.id === "b").status, "match", "re-planning keeps progress");
   assert.deepEqual(counts(replanned), { todo: 0, "in-progress": 1, match: 1, blocked: 1, skipped: 0 });
+});
+
+test("queue: a filtered re-plan keeps the rest, drops deleted frames, keeps maxAttempts, reopens when raised", () => {
+  let q = planQueue(null, [{ id: "a" }, { id: "b" }, { id: "c" }], { maxAttempts: 1, now: 0 });
+  q = recordVerify(q, "a", { verdict: "differs", high: 1, medium: 0 }).queue;
+  q = nextItem(q, "x").queue;
+  assert.equal(q.items.find((i) => i.id === "a").status, "blocked");
+  const filtered = planQueue(q, [{ id: "b" }], { frameIds: new Set(["a", "b"]) });
+  assert.deepEqual(filtered.items.map((i) => i.id).sort(), ["a", "b"], "c was deleted from the design; a stays although filtered out");
+  assert.equal(filtered.maxAttempts, 1, "maxAttempts is kept when not passed");
+  assert.equal(filtered.items.find((i) => i.id === "a").status, "blocked");
+  const raised = planQueue(filtered, [], { maxAttempts: 3 });
+  assert.equal(raised.items.find((i) => i.id === "a").status, "todo", "raising maxAttempts reopens an item blocked for attempts");
+  const manual = settle(raised, "b", "blocked", "needs an API").queue;
+  assert.equal(planQueue(manual, [], { maxAttempts: 9 }).items.find((i) => i.id === "b").status, "blocked", "a manual block stays");
+});
+
+test("mock urls: /regex/flags without g or y, globs stay globs", () => {
+  const re = mockPattern("/api\\/items/gi");
+  assert.ok(re instanceof RegExp && re.flags === "i");
+  assert.ok(re.test("http://x/API/items") && re.test("http://x/api/items"), "no lastIndex state between requests");
+  assert.equal(mockPattern("**/api/items"), "**/api/items");
+  assert.equal(mockPattern("/**/api/"), "/**/api/");
 });
 
 const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pen-multi-port-")));
@@ -87,8 +111,8 @@ test("the loop: plan, parallel claims, verify recorded, done refused until MATCH
   assert.match(text(plan), /Port queue: 2 frames \(2 todo/);
   assert.match(text(plan), /0 without a route, 0 states without a states entry/);
 
-  const a = text(await port({ action: "next", claim: "agent-a" }));
-  const b = text(await port({ action: "next", claim: "agent-b" }));
+  // Claimed at the same time from one process: the queue lock still hands out distinct items.
+  const [a, b] = (await Promise.all([port({ action: "next", claim: "agent-a" }), port({ action: "next", claim: "agent-b" })])).map(text);
   const idA = /\((\S+)\)/.exec(a)[1], idB = /\((\S+)\)/.exec(b)[1];
   assert.notEqual(idA, idB, "parallel claims get different screens");
   assert.match(a + b, /State "Home — empty" from \.pen-multi\.json/);

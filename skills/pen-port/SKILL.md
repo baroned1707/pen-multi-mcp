@@ -29,7 +29,7 @@ Repeat until `port next` says nothing is left:
 3. Implement it in the existing code: the design is the source of truth; rebuild shells, navigation and components whose structure differs; mark elements with `data-pen="<address>"` (web) / `testID="pen:<address>"` (React Native).
 4. `verify({ target: "<id>", source: { kind: "web" } })` (routes and states come from .pen-multi.json).
 5. Fix the high findings first (missing, extra, order), then medium; verify again.
-6. MATCH → `port({ action: "done", id })`. Out of attempts, or blocked by something only the user can decide → `port({ action: "block", id, reason })`, then continue with `next`.
+6. MATCH → `port({ action: "done", id })`. Out of attempts (to retry, re-run `plan` with a higher `maxAttempts`), or blocked by something only the user can decide → `port({ action: "block", id, reason })`, then continue with `next`.
 
 Never report a screen as done without `port done` succeeding. Never stop while `next` hands out work.
 
@@ -39,7 +39,7 @@ When more than ~4 screens are left, start up to 3 subagents with the Agent tool,
 
 > Port screens of <file.pen> in <project>: follow the pen-port skill loop (section 2) with claim "<agent-N>" until `port next` says nothing is left for you. Do not edit files another agent is working on; if two screens share a component, the first one to need it changes it and the others re-verify.
 
-Watch `port({ action: "status" })` between rounds.
+Watch `port({ action: "status" })` between rounds. When the subagents have returned but `port next` still reports items in progress by others, a subagent stopped mid-item: wait until the lease time it prints, then call `port next` again to take the item over.
 
 ## 4. Finish
 

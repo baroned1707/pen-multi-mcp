@@ -48,7 +48,7 @@ export function registerPortTools({ tool, z, route, design, optionalFilePath, co
     const conv = conventions(file);
     const lines = [`# Next: ${item.name} (${item.id})${item.width ? ` · ${item.width}` : ""}${item.theme ? ` · ${item.theme}` : ""}`, `Claimed by "${item.claim}" until ${item.leaseUntil}; attempts so far: ${item.attempts ?? 0}.`];
     const st = item.stateConfig;
-    if (item.route) lines.push(`Page: ${/^[a-z]+:/i.test(item.route) ? item.route : `${conv.baseUrl ?? "<baseUrl>"}${item.route.startsWith("/") ? "" : "/"}${item.route}`}`);
+    if (item.route) lines.push(`Page: ${/^[a-z]+:/i.test(item.route) ? item.route : `${(conv.baseUrl ?? "<baseUrl>").replace(/\/+$/, "")}/${item.route.replace(/^\/+/, "")}`}`);
     else lines.push(`No route for this screen yet: add it to .pen-multi.json { "baseUrl": …, "routes": { "${item.screen}": "/path" } } or pass source.url to verify.`);
     if (st) lines.push(`State "${st.key}" from .pen-multi.json: ${JSON.stringify({ route: st.route, steps: st.steps, mocks: st.mocks?.map((m) => m.url), deepLink: st.deepLink })}`);
     else if (item.state) lines.push(`This is the "${item.state}" state: put the app in it for verify (source.mocks / steps, or a states entry in .pen-multi.json keyed "${item.screen} — ${item.state}").`);
@@ -75,7 +75,7 @@ export function registerPortTools({ tool, z, route, design, optionalFilePath, co
       themes: z.array(z.string()).optional().describe("plan: only these themes."),
       maxAttempts: z.number().int().min(1).max(50).optional().describe("plan: verify runs per screen before it is blocked (default 5)."),
     },
-    async ({ filePath: f, action, id, reason, claim = "main", filter, widths, themes, maxAttempts = 5 }) => {
+    async ({ filePath: f, action, id, reason, claim = "main", filter, widths, themes, maxAttempts }) => {
       const target = await route(f);
       const file = target.file;
       if (action === "plan") {
@@ -89,12 +89,14 @@ export function registerPortTools({ tool, z, route, design, optionalFilePath, co
         ).filter((c) => (!low || [c.name, c.screen, c.state, c.code].some((v) => v && String(v).toLowerCase().includes(low))) && (!widths || widths.map(String).includes(String(c.width))) && (!themes || themes.includes(c.theme)));
         if (!cells.length) throw new ReadError("No frames match the filter.");
         for (const c of cells) {
+          // The same lookup verify uses (frame name, then "Screen — state", then screen / code).
           c.route = [c.name, c.row.state ? `${c.screen} — ${c.row.state}` : null, c.screen, c.code].map((k) => k && conv.routes?.[k]).find(Boolean) ?? null;
           c.stateConfig = stateFor(target, c.name, { name: c.name, row: c.row }) ?? null;
           if (!c.route && c.stateConfig?.route) c.route = c.stateConfig.route;
           delete c.row;
         }
-        const out = await update(file, (q) => ({ queue: planQueue(q, cells, { maxAttempts }) }));
+        const frameIds = new Set(analysis.matrix.rows.flatMap((r) => Object.values(r.cells).flat().map((c) => c.id)));
+        const out = await update(file, (q) => ({ queue: planQueue(q, cells, { maxAttempts, frameIds }) }));
         const n = counts(out.queue);
         return design.wrap(target, [
           `Port queue: ${out.queue.items.length} frames (${n.todo} todo, ${n["in-progress"]} in progress, ${n.match} match, ${n.blocked} blocked, ${n.skipped} skipped) — ${queuePath(file)}`,
@@ -109,25 +111,37 @@ export function registerPortTools({ tool, z, route, design, optionalFilePath, co
         });
         if (!out.item) {
           const n = counts(out.queue);
-          return design.wrap(target, [`Nothing left for "${claim}": ${n.match} match, ${n.blocked} blocked, ${n.skipped} skipped, ${n["in-progress"]} in progress by others.`, n.blocked ? "Blocked items need the user: port({ action: \"status\" }) lists why." : "The port is complete."]);
+          const held = out.queue.items.filter((i) => i.status === "in-progress").map((i) => i.leaseUntil).sort()[0];
+          return design.wrap(target, [
+            `Nothing left for "${claim}": ${n.match} match, ${n.blocked} blocked, ${n.skipped} skipped, ${n["in-progress"]} in progress by others.`,
+            n["in-progress"]
+              ? `Other agents hold ${n["in-progress"]} item(s); a lease expires at ${held} — if an agent stopped, call port next again after that to take its item over.`
+              : n.blocked
+                ? "Blocked items need the user: port({ action: \"status\" }) lists why."
+                : "The port is complete.",
+          ]);
         }
         return design.wrap(target, describeNext(out.item, file));
       }
+      let freshness = "";
       if (action === "done") {
         if (!id) throw new ReadError("done needs the frame id.");
         await saver?.flush(file).catch(() => {});
-        const last = latestReport(file, id);
+        // The run the queue recorded last for this frame (verify writes it), else the newest report.
+        const recorded = load(file)?.items.find((i) => i.id === id)?.lastReport;
+        const last = recorded && fs.existsSync(recorded) ? { report: JSON.parse(fs.readFileSync(recorded, "utf8")), path: recorded } : latestReport(file, id);
         if (!last) throw new ReadError(`${id} has not been verified yet: run verify({ target: ${JSON.stringify(id)}, source }) until it reports MATCH.`);
         const s = last.report.summary;
         if (s.verdict !== "match") throw new ReadError(`${id} is not done: its latest verify DIFFERS (${s.high} high, ${s.medium} medium) — ${last.path}. Fix and verify again.`);
         const now = target.mode === "app" ? null : sha1(file);
         if (now && last.report.pen?.sha1 && last.report.pen.sha1 !== now) throw new ReadError(`${id} was verified against an older version of the design; verify again before done.`);
+        if (!now || !last.report.pen?.sha1) freshness = " (the design is open in the pen.dev app, so whether it changed since the verify was not checked)";
         const out = await update(file, (q) => {
           if (!q) throw new ReadError("No port queue for this file: port({ action: \"plan\" }) first.");
           return settle(q, id, "match");
         });
         const n = counts(out.queue);
-        return design.wrap(target, [`${out.item.name} (${id}) is done: MATCH.`, `${n.match}/${out.queue.items.length} done, ${n.todo + n["in-progress"]} left, ${n.blocked} blocked.`, n.todo + n["in-progress"] ? "Next: port({ action: \"next\" })." : "Nothing left to take."]);
+        return design.wrap(target, [`${out.item.name} (${id}) is done: MATCH${freshness}.`, `${n.match}/${out.queue.items.length} done, ${n.todo + n["in-progress"]} left, ${n.blocked} blocked.`, n.todo + n["in-progress"] ? "Next: port({ action: \"next\" })." : "Nothing left to take."]);
       }
       if (action === "skip" || action === "block") {
         if (!id || !reason) throw new ReadError(`${action} needs id and reason.`);
@@ -153,7 +167,9 @@ export function registerPortTools({ tool, z, route, design, optionalFilePath, co
   return {
     async onVerify(file, id, report, reportPath) {
       if (!fs.existsSync(queuePath(file))) return;
-      await update(file, (q) => (q ? recordVerify(q, id, { verdict: report.summary.verdict, report: reportPath, high: report.summary.high, medium: report.summary.medium }) : null)).catch(() => {});
+      await update(file, (q) => (q ? recordVerify(q, id, { verdict: report.summary.verdict, report: reportPath, high: report.summary.high, medium: report.summary.medium }) : null)).catch((err) =>
+        process.stderr.write(`pen-multi: could not record the verify of ${id} on the port queue: ${err.message}\n`),
+      );
     },
   };
 }

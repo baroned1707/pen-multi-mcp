@@ -134,7 +134,26 @@ export class FileLock {
  * Machine-wide mutex shared by every pen-multi process, e.g. for the app's single integrated
  * browser, so one agent's page load cannot land between another agent's load and read.
  */
-export async function withMachineLock(name, fn, { waitMs = config.waitForSlotMs } = {}) {
+// The file lock excludes other processes only (it is held per pid), so callers in this process
+// (subagents share one server) queue on a promise chain per name first.
+const localChains = new Map();
+
+export async function withMachineLock(name, fn, opts = {}) {
+  const prev = localChains.get(name) ?? Promise.resolve();
+  let release;
+  const mine = new Promise((r) => (release = r));
+  const chain = prev.then(() => mine);
+  localChains.set(name, chain);
+  await prev;
+  try {
+    return await acrossProcesses(name, fn, opts);
+  } finally {
+    release();
+    if (localChains.get(name) === chain) localChains.delete(name);
+  }
+}
+
+async function acrossProcesses(name, fn, { waitMs = config.waitForSlotMs } = {}) {
   const lock = new FileLock(`mutex:${name}`);
   const deadline = Date.now() + waitMs;
   for (;;) {

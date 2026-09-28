@@ -38,7 +38,7 @@ function isSnapshotFile(file) {
 
 const describeSource = (src) =>
   (src.kind === "web" ? `web ${src.url}` : src.kind === "image" ? `image ${src.path}` : `${src.kind} ${src.platform}${src.device ? ` ${src.device}` : ""}${src.deepLink ? ` ${src.deepLink}` : ""}`) +
-  (src.state ? ` (state "${src.state}" from .pen-multi.json)` : "") +
+  (src.state ? ` (state "${src.state}" from .pen-multi.json${src.kind === "web" ? "" : ", its deepLink only"})` : "") +
   (src.mocks?.length ? ` with ${src.mocks.length} mock${src.mocks.length > 1 ? "s" : ""}` : "");
 
 export function registerVerifyTools({ tool, z, route, design, withMachineLock, optionalFilePath, ok, conventions, saver, hooks = {} }) {
@@ -51,8 +51,11 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
   function stateFor(target, wanted, frame) {
     const states = conventions(target.file).states ?? {};
     const row = frame?.row;
-    const keys = [frame?.name, row && row.state ? `${row.screen} — ${row.state}` : null, wanted, row?.code, row?.screen].filter(Boolean);
-    const key = keys.find((k) => states[k]);
+    // A state frame ("Home — empty") never falls back to its screen's entry: that is another state.
+    const keys = row?.state
+      ? [frame?.name, `${row.screen} — ${row.state}`, wanted !== row.screen && wanted !== row.code ? wanted : null]
+      : [frame?.name, wanted, row?.code, row?.screen];
+    const key = keys.filter(Boolean).find((k) => states[k]);
     return key ? { key, ...states[key] } : null;
   }
   function withState(target, wanted, frame, src) {
@@ -62,8 +65,10 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
     if (out.kind === "web") {
       if (!out.url && st.route) out.url = /^[a-z]+:/i.test(st.route) ? st.route : routeJoin(conventions(target.file).baseUrl, st.route);
       out.steps = [...(st.steps ?? []), ...(src.steps ?? [])];
-      const own = new Set((src.mocks ?? []).map((m) => m.url));
-      out.mocks = [...(src.mocks ?? []), ...(st.mocks ?? []).filter((m) => !own.has(m.url))];
+      // The call's mocks win over the state's for the same url and method.
+      const key = (m) => `${m.method?.toUpperCase() ?? "*"} ${m.url}`;
+      const own = new Set((src.mocks ?? []).map(key));
+      out.mocks = [...(src.mocks ?? []), ...(st.mocks ?? []).filter((m) => !own.has(key(m)) && !own.has(`* ${m.url}`))];
     } else if (!out.deepLink && st.deepLink) out.deepLink = st.deepLink;
     out.state = st.key;
     return out;
@@ -237,7 +242,8 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       const rootTheme = model.root.theme && typeof model.root.theme === "object" ? Object.values(model.root.theme)[0] : undefined;
       const d = designNodes(model);
       // The .pen's hash keeps forks of the same screen (verified by two agents at once) apart.
-      const fileTag = createHash("sha1").update(target.file).digest("hex").slice(0, 6);
+      // With the id: two frames with the same name (e.g. one per width) keep their own reports.
+      const fileTag = createHash("sha1").update(`${target.file}\n${id}`).digest("hex").slice(0, 6);
       const name = slug([model.root.name ?? id, width, theme, fileTag].filter(Boolean).join("-"));
       const outBase = path.join(process.cwd(), OUT_DIR, name);
       // Per .pen file: forks share node ids, and two agents may verify both at once.

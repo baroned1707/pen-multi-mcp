@@ -424,23 +424,41 @@ export const WEB_FIELDS = ["text", "bg", "fg", "fontSize", "fontWeight", "lineHe
  * method?, status?, json? | body? | file?, headers?, delayMs? }. Puts the page into a state
  * (empty list, error, loading) without a backend or code changes.
  */
+const MOCK_TYPES = { ".json": "application/json", ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml", ".txt": "text/plain" };
+
+/** A mock's url: "/regex/flags" (without a "**" glob in it) is a RegExp, anything else a glob. */
+export function mockPattern(url) {
+  const re = /^\/(.+)\/([a-z]*)$/.exec(url ?? "");
+  if (!re || re[1].includes("**")) return url;
+  return new RegExp(re[1], re[2].replace(/[gy]/g, "")); // g/y make test() stateful across requests
+}
+
 async function installMocks(context, mocks, cwd) {
-  for (const m of mocks) {
-    const re = /^\/(.+)\/([a-z]*)$/.exec(m.url ?? "");
-    const pattern = re ? new RegExp(re[1], re[2]) : m.url;
+  // Playwright tries the last registered route first; register in reverse so the first mock wins.
+  for (const m of [...mocks].reverse()) {
+    const pattern = mockPattern(m.url);
     if (!pattern) throw new Error(`a mock needs a url: ${JSON.stringify(m)}`);
     let body = m.body;
-    if (m.json !== undefined) body = JSON.stringify(m.json);
-    if (m.file) body = fs.readFileSync(path.resolve(cwd, m.file));
+    let contentType = m.contentType;
+    if (m.json !== undefined) {
+      body = JSON.stringify(m.json);
+      contentType ??= "application/json";
+    }
+    if (m.file) {
+      body = fs.readFileSync(path.resolve(cwd, m.file));
+      contentType ??= MOCK_TYPES[path.extname(m.file).toLowerCase()];
+    }
     await context.route(pattern, async (route) => {
-      if (m.method && route.request().method().toUpperCase() !== m.method.toUpperCase()) return route.fallback();
+      const req = route.request();
+      if (m.method && req.method().toUpperCase() !== m.method.toUpperCase()) return route.fallback();
       if (m.delayMs) await new Promise((r) => setTimeout(r, Math.min(m.delayMs, 60_000)));
-      await route.fulfill({
-        status: m.status ?? 200,
-        headers: { "access-control-allow-origin": "*", ...(m.headers ?? {}) },
-        contentType: m.json !== undefined ? "application/json" : m.contentType,
-        body: body ?? "",
-      });
+      // Echo the origin so credentialed requests (cookies, auth) accept the mocked answer too.
+      const origin = (await req.headerValue("origin").catch(() => null)) ?? "*";
+      const cors = origin === "*" ? { "access-control-allow-origin": "*" } : { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", vary: "Origin" };
+      if (req.method() === "OPTIONS" && !m.method) {
+        return route.fulfill({ status: 204, headers: { ...cors, "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS", "access-control-allow-headers": (await req.headerValue("access-control-request-headers").catch(() => null)) ?? "*" } });
+      }
+      await route.fulfill({ status: m.status ?? 200, headers: { ...cors, ...(m.headers ?? {}) }, contentType, body: body ?? "" });
     });
   }
 }

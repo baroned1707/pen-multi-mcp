@@ -4,14 +4,22 @@
 export const LEASE_MS = 30 * 60_000;
 export const STATUSES = ["todo", "in-progress", "match", "blocked", "skipped"];
 
-/** Builds (or refreshes) the queue from matrix cells, keeping the progress of known items. */
-export function planQueue(existing, cells, { maxAttempts = 5, now = Date.now() } = {}) {
-  const old = new Map((existing?.items ?? []).map((i) => [i.id, i]));
-  const items = cells.map((c) => {
-    const prev = old.get(c.id);
-    return prev ? { ...prev, name: c.name, screen: c.screen, state: c.state, width: c.width, theme: c.theme, route: c.route, stateConfig: c.stateConfig } : { id: c.id, name: c.name, screen: c.screen, state: c.state, width: c.width, theme: c.theme, route: c.route, stateConfig: c.stateConfig, status: "todo", attempts: 0 };
-  });
-  return { version: 1, createdAt: existing?.createdAt ?? new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), maxAttempts, items };
+/**
+ * Adds or refreshes `cells` in the queue, keeping every known item's progress. Items outside
+ * `cells` are kept (a filtered plan must not forget the rest) unless their frame no longer exists
+ * (`frameIds`). maxAttempts defaults to the queue's; raising it reopens items blocked for running
+ * out of attempts.
+ */
+export function planQueue(existing, cells, { maxAttempts, frameIds, now = Date.now() } = {}) {
+  const max = maxAttempts ?? existing?.maxAttempts ?? 5;
+  const byId = new Map((existing?.items ?? []).filter((i) => !frameIds || frameIds.has(i.id)).map((i) => [i.id, i]));
+  for (const c of cells) {
+    const prev = byId.get(c.id);
+    const fields = { name: c.name, screen: c.screen, state: c.state, width: c.width, theme: c.theme, route: c.route, stateConfig: c.stateConfig };
+    byId.set(c.id, prev ? { ...prev, ...fields } : { id: c.id, ...fields, status: "todo", attempts: 0 });
+  }
+  const items = [...byId.values()].map((i) => (i.status === "blocked" && i.autoBlocked && (i.attempts ?? 0) < max ? { ...i, status: "todo", autoBlocked: undefined, reason: undefined } : i));
+  return { version: 1, createdAt: existing?.createdAt ?? new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), maxAttempts: max, items };
 }
 
 const leaseAlive = (item, now) => item.status === "in-progress" && item.leaseUntil && Date.parse(item.leaseUntil) > now;
@@ -26,7 +34,8 @@ export function nextItem(queue, claim, { now = Date.now() } = {}) {
   for (const i of q.items) {
     if ((i.status === "todo" || i.status === "in-progress") && i.attempts >= q.maxAttempts && i.lastVerdict !== "match") {
       i.status = "blocked";
-      i.reason = `${i.attempts} verify runs without MATCH; needs a decision`;
+      i.autoBlocked = true;
+      i.reason = `${i.attempts} verify runs without MATCH; needs a decision (raise maxAttempts with plan to retry)`;
       delete i.claim;
       delete i.leaseUntil;
     }
