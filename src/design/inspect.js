@@ -399,7 +399,7 @@ export function hint(model, n, parent, flavor) {
  * The outline of a model: one line per visible node, repeated siblings collapsed, cut at `depth`
  * and `maxLines` with the follow-up call that continues from where it stopped.
  */
-export function outline(model, { depth = 8, maxLines = 400, flavor, continueWith = (id) => id } = {}) {
+export function outline(model, { depth = 8, maxLines = 400, flavor, continueWith = (id) => id, onNode } = {}) {
   const { addresses: addr } = addresses(model);
   const lines = [];
   let truncatedAt = null;
@@ -412,6 +412,7 @@ export function outline(model, { depth = 8, maxLines = 400, flavor, continueWith
     if (truncatedAt) return;
     const pad = "  ".repeat(level);
     if (!push(`${pad}${describe(model, n)}`)) return (truncatedAt = n.id);
+    onNode?.(n.id, lines.length - 1);
     const h = hint(model, n, parent, flavor);
     if (h && !push(`${pad}  ${h}`)) return (truncatedAt = n.id);
     const kids = visibleChildren(n);
