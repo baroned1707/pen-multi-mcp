@@ -14,6 +14,7 @@ import { Timings } from "./timing.js";
 import { carryImages, readPrinted, snippets } from "./transfer.js";
 import { FileLock, SessionPool, config, normalize, withMachineLock } from "./pool.js";
 import { prewarm } from "./prewarm.js";
+import { current as currentCall, recentSlow, recordIfSlow, withCall } from "./calllog.js";
 import { registerVerifyTools } from "./verify/tools.js";
 import { registerLintTools } from "./lint/tools.js";
 import { registerImportTools } from "./import/tools.js";
@@ -62,7 +63,7 @@ Many agents and projects:
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "1.0.3" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "1.1.0" }, { instructions: INSTRUCTIONS });
 
 const filePath = z
   .string()
@@ -133,7 +134,12 @@ const heldByOtherAgent = (file) => {
  * it open (or has just opened it in the background): the official server silently falls back to
  * the active document for files it does not have open.
  */
-const route = (f, opts) => timings.time("route", () => routeUntimed(f, opts));
+const route = async (f, opts) => {
+  const target = await timings.time("route", () => routeUntimed(f, opts));
+  const ctx = currentCall();
+  if (ctx) Object.assign(ctx, { file: target.file, mode: target.mode });
+  return target;
+};
 
 async function routeUntimed(f, { needsApp = false, tool: toolName, write = false } = {}) {
   const appUp = await app.available();
@@ -190,13 +196,23 @@ async function routeUntimed(f, { needsApp = false, tool: toolName, write = false
 }
 
 const tool = (name, description, schema, handler) =>
-  server.registerTool(name, { description, inputSchema: schema }, async (args) => {
-    try {
-      return await handler(args);
-    } catch (err) {
-      return fail(err.message);
-    }
-  });
+  server.registerTool(name, { description, inputSchema: schema }, (args) =>
+    withCall(name, async () => {
+      let res;
+      try {
+        res = await handler(args);
+      } catch (err) {
+        res = fail(err.message);
+      }
+      // Slow calls are logged with where the time went; waiting behind other agents is said so.
+      const ctx = currentCall();
+      const slow = ctx && recordIfSlow(config.home, ctx, { error: Boolean(res?.isError) });
+      if (slow && slow.appOthers > 0 && Array.isArray(res?.content)) {
+        res = { ...res, content: [...res.content, { type: "text", text: `NOTE: this took ${(slow.totalMs / 1000).toFixed(1)} s: ${slow.appOthers} other agent call(s) were using the pen.dev app at the same time, and the app runs one at a time.` }] };
+      }
+      return res;
+    }),
+  );
 
 // read_skill / get_style return static content for a given CLI version. Every agent reads them
 // first, so answers are cached on disk and shared by all pen-multi processes on this machine.
@@ -565,7 +581,7 @@ tool(
       : { running: false };
     return ok(
       JSON.stringify(
-        { sessions, machineWide, desktopApp, limits, prewarm: Object.fromEntries(pool.prewarmResults), timings: timings.summary(), pendingSaves: saver.pending(), saveErrors: saver.errors() },
+        { sessions, machineWide, desktopApp, limits, prewarm: Object.fromEntries(pool.prewarmResults), slowCalls: recentSlow(config.home, 8), timings: timings.summary(), pendingSaves: saver.pending(), saveErrors: saver.errors() },
         null,
         2,
       ),

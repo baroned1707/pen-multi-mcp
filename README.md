@@ -163,6 +163,7 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 ## Behaviour
 
 - **Autosave**: every successful change is saved in the background right after the call returns (`PEN_MULTI_SAVE_DELAY_MS`, default 1500 ms of no further writes; bursts coalesce into one save). `save`, `close_file`, `fork_version`, eviction and shutdown flush first. Call `save` before reading a `.pen` from disk or committing it. A failed save is reported on the next call for that file and in `list_sessions`.
+- **Slow calls**: any tool call over `PEN_MULTI_SLOW_MS` (3000) is logged to `~/.pen-multi/slow.jsonl` with where its time went (routing, the engine or the app, saving) and how many other agents were using the pen.dev app at that moment; `list_sessions` shows the latest with a likely cause. A call that waited behind other agents' app calls says so in its response (the app runs one call at a time for everyone).
 - **App state**: the list of app windows is read on every call; the app's active document is cached for `PEN_MULTI_APP_STATE_TTL_MS` (2000 ms) and re-read whenever a write depends on it. `list_sessions` reports median/p90 timings for routing, calls and saves.
 - **Timeouts**: a call that runs past `PEN_MULTI_CALL_TIMEOUT_MS` stops that file's editor (its late output would otherwise leak into the next call); the next call reopens the file from disk.
 - **Paths** are resolved through symlinks, so `/tmp/x.pen` and `/private/tmp/x.pen` share one editor and one lock.
@@ -183,6 +184,7 @@ Each Claude Code session starts its own `pen-multi-mcp` process, with the sessio
 | `PEN_MULTI_STARTUP_TIMEOUT_MS` | `180000` | Editor startup timeout |
 | `PEN_MULTI_IDLE_MINUTES` | `15` | Idle time before a file is saved and closed |
 | `PEN_MULTI_CALL_TIMEOUT_MS` | `300000` | Per-call timeout |
+| `PEN_MULTI_SLOW_MS` | `3000` | Calls slower than this are logged with their breakdown |
 | `PEN_MULTI_PREWARM` | `1` | `0` never starts an editor ahead of use |
 | `PEN_MULTI_PREWARM_MINUTES` | `3` | How long an unused pre-warmed editor stays open |
 | `PEN_MULTI_PREWARM_DELAY_MS` | `2000` | Delay after server start before pre-warming |

@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { resolveCliEntry, stripAnsi } from "./shell.js";
+import { inAppCall } from "./calllog.js";
 
 // The pen.dev desktop app's own MCP server. pen-multi runs it as a child to reach features
 // only the app has (integrated browser, spawn_agents, the user's live canvas and selection).
@@ -23,6 +24,7 @@ const envJson = (name, fallback) => {
 };
 
 export const appConfig = {
+  home: process.env.PEN_MULTI_HOME ?? path.join(os.homedir(), ".pen-multi"),
   enabled: process.env.PEN_MULTI_APP !== "0",
   server: process.env.PEN_MULTI_APP_SERVER ?? DEFAULT_SERVER,
   agent: process.env.PEN_MULTI_APP_AGENT ?? "claudeCodeCLI",
@@ -87,7 +89,8 @@ export class AppBridge {
     }
     const client = await this.#client();
     try {
-      const res = await client.callTool({ name, arguments: args }, undefined, { timeout: 600_000 });
+      // Marked as in flight machine-wide: the app runs one call at a time for every agent.
+      const res = await inAppCall(appConfig.home, () => client.callTool({ name, arguments: args }, undefined, { timeout: 600_000 }));
       if (!res.isError) return res;
       return { ...res, content: res.content.map((c) => (c.type === "text" ? { ...c, text: stripCode(c.text) } : c)) };
     } catch (err) {
@@ -303,7 +306,7 @@ export class AppBridge {
   async #client() {
     if (this.client) return this.client;
     this.connecting ??= (async () => {
-      const client = new Client({ name: "pen-multi", version: "1.0.3" });
+      const client = new Client({ name: "pen-multi", version: "1.1.0" });
       const transport = new StdioClientTransport({
         command: appConfig.server,
         args: ["--app", "desktop", "--agent", appConfig.agent, "--enable_spawn_agents"],

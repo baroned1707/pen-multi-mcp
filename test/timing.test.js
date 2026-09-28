@@ -17,3 +17,12 @@ test("time() records how long an async function took and returns its result", as
   assert.equal(out, "x");
   assert.ok(t.summary().route.medianMs >= 15);
 });
+
+test("call log: causes from where the time went", async () => {
+  const { cause } = await import("../src/calllog.js");
+  assert.match(cause({ totalMs: 5000, marks: { call: 4800 }, mode: "app", appOthers: 0 }), /pen\.dev app itself was slow/);
+  assert.match(cause({ totalMs: 5000, marks: { call: 4800 }, mode: "headless", appOthers: 0 }), /pen engine was slow/);
+  assert.match(cause({ totalMs: 5000, marks: { route: 4000, call: 500 }, appOthers: 0 }), /where the file is open/);
+  assert.match(cause({ totalMs: 5000, marks: {}, appOthers: 2 }), /2 other agent call/);
+  assert.match(cause({ totalMs: 5000, marks: { call: 1000, route: 900 }, appOthers: 0 }), /no single step/);
+});

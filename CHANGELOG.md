@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0 — 2026-09-28
+
+- Slow-call diagnostics: calls over 3 s are logged machine-wide (`~/.pen-multi/slow.jsonl`) with their time per step and whether other agents were using the pen.dev app; `list_sessions` shows them with a likely cause; a call that waited behind other agents' app calls says so. Measured on the app: screenshots and exports take 0.35–0.8 s whether Pen is in front, behind another app or hidden, so earlier 17–60 s screenshots came from something else — this log is there to catch it next time.
+
 ## 1.0.3 — 2026-09-28
 
 From watching the trading-agent session use it:

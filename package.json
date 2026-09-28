@@ -1,6 +1,6 @@
 {
   "name": "pen-multi-mcp",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "MCP server that drives headless pen.dev CLI sessions: one isolated editor per .pen file, no desktop app required",
   "type": "module",
   "bin": {

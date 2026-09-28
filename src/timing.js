@@ -1,4 +1,6 @@
-/** Rolling latency samples per step, for list_sessions. */
+import { mark } from "./calllog.js";
+
+/** Rolling latency samples per step, for list_sessions (and the current call's breakdown). */
 export class Timings {
   constructor(limit = 200) {
     this.limit = limit;
@@ -17,7 +19,9 @@ export class Timings {
     try {
       return await fn();
     } finally {
-      this.record(step, Math.round(performance.now() - started));
+      const ms = Math.round(performance.now() - started);
+      this.record(step, ms);
+      mark(step, ms);
     }
   }
 

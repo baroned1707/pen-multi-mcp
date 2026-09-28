@@ -38,6 +38,8 @@ server.registerTool("get_app_state", { inputSchema: {} }, firstCallFails(async (
 server.registerTool("execute", { inputSchema: { filePath: z.string().optional(), input: z.string().optional() } }, firstCallFails(async (a) => {
   // The real server reports snippet failures as JSON-RPC internal errors, not isError results.
   if (a.input === "FAIL") throw new McpError(ErrorCode.InternalError, 'Failed to execute: SyntaxError\n- `editId`: "E1"');
+  const slow = /SLOW:(\d+)/.exec(a.input ?? "");
+  if (slow) await sleep(Number(slow[1])); // a busy app
   return reply(`APP-EXECUTE doc=${docFor(a.filePath)} input=${a.input}`);
 }));
 server.registerTool(

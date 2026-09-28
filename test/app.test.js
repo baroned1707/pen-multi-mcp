@@ -287,3 +287,23 @@ test("a read-only snippet on an app document is not saved and does not claim a s
   await new Promise((r) => setTimeout(r, 2000));
   assert.equal(mtime(live), before, "nothing written for a read");
 });
+
+test("a slow app call made while another agent uses the app says so, and is logged with its cause", async () => {
+  const a = await agent(withApp({ PEN_MULTI_SLOW_MS: "1000" }));
+  const b = await agent(withApp({ PEN_MULTI_SLOW_MS: "1000" }));
+  await call(a, "execute", { filePath: live, input: "Print(1)" }); // warm connections
+  await call(b, "execute", { filePath: live, input: "Print(1)" });
+  const first = call(a, "execute", { filePath: live, input: "Get SLOW:2500" });
+  await new Promise((r) => setTimeout(r, 300));
+  const second = await call(b, "execute", { filePath: live, input: "Get SLOW:1500" });
+  await first;
+  assert.match(text(second), /NOTE: this took \d+\.\d s: 1 other agent call\(s\) were using the pen\.dev app at the same time/);
+  const log = fs.readFileSync(path.join(home, "slow.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const entry = log.find((e) => e.appOthers === 1);
+  assert.equal(entry.tool, "execute");
+  assert.equal(entry.mode, "app");
+  assert.ok(entry.marks.call >= 1000, JSON.stringify(entry.marks));
+  const status = JSON.parse(text(await call(b, "list_sessions", {})));
+  assert.match(status.slowCalls.find((c) => c.appOthers === 1).cause, /other agent call\(s\) were using the pen\.dev app/);
+  assert.ok(status.slowCalls.some((c) => c.appOthers === 0 && /the pen\.dev app itself was slow/.test(c.cause)), "a slow call alone is blamed on the app");
+});
