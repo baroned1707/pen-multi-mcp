@@ -12,6 +12,7 @@ import { pngBuffer, readPng, resize, writePng } from "./image.js";
 import { verifyScreen } from "./pipeline.js";
 import { contactSheet, findingCrops, renderReport, sheetRow } from "./report.js";
 import { pointFindingsAtCode } from "./code.js";
+import { designEdits, editLines } from "./reverse.js";
 import { projectMapping } from "../mapping/index.js";
 
 const OUT_DIR = "design-verify";
@@ -231,9 +232,10 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         .optional()
         .describe("Overrides: position/size px (4), sizeRatio (0.05), color ΔE (10), fontSize px (1), fontWeight (100), lineHeight px (2), radius px (2)."),
       maxLines: z.number().int().min(10).max(2000).optional().describe("Findings listed inline (default 120); the JSON has all."),
+      direction: z.enum(["design-to-code", "code-to-design"]).optional().describe('"design-to-code" (default): the code should follow the design. "code-to-design": the design should follow the code — each finding with a clear cause gets a proposed execute operation (not applied).'),
       crops: z.number().int().min(0).max(10).optional().describe("Close-ups (design | app) of the worst findings attached as images (default 3; 0 for none)."),
     },
-    async ({ filePath: f, target: wanted, width, theme, source: src, snapshot: snapPath, tolerance, maxLines = 120, crops = 3 }) => {
+    async ({ filePath: f, target: wanted, width, theme, source: src, snapshot: snapPath, tolerance, maxLines = 120, crops = 3, direction = "design-to-code" }) => {
       if (!src && !snapPath) throw new ReadError("Pass source (to capture now) or snapshot (a capture file).");
 
       const target = await route(f);
@@ -283,6 +285,10 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       };
       await saver?.flush(target.file).catch(() => {}); // hash the design as saved, not mid-save
       const penHash = target.mode === "app" || !fs.existsSync(target.file) ? null : createHash("sha1").update(fs.readFileSync(target.file)).digest("hex");
+      let previousHash = null;
+      try {
+        previousHash = JSON.parse(fs.readFileSync(files.report, "utf8")).pen?.sha1 ?? null;
+      } catch {}
       fs.writeFileSync(
         files.report,
         JSON.stringify(
@@ -301,7 +307,14 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         ),
       );
       await hooks.onVerify?.(target.file, id, { summary: result.summary }, files.report);
-      const res = design.wrap(target, renderReport({ meta, ...result, files, maxLines }));
+      let reportLines = renderReport({ meta, ...result, files, maxLines });
+      if (direction === "code-to-design") {
+        const s = result.scale ?? 1;
+        const elements = (snapshot.elements ?? []).map((e) => ({ ...e, box: e.box && { x: e.box.x * s, y: e.box.y * s, w: e.box.w * s, h: e.box.h * s } }));
+        const edits = designEdits(result.findings, { model, theme: frameTheme ?? rootTheme ?? null, elements });
+        reportLines = [...reportLines.filter((l) => !l.startsWith("Fix the high findings first")), ...editLines(edits, { designChanged: Boolean(previousHash && penHash && previousHash !== penHash) })];
+      }
+      const res = design.wrap(target, reportLines);
       if (uiImg && crops > 0) {
         for (const { finding, image } of findingCrops({ designImg, uiImg, frame: d.frame, findings: result.findings, uiWidth: snapshot.viewport?.w, n: crops })) {
           res.content.push({ type: "text", text: `Finding ${finding.n} [${finding.severity}] close-up — left: design, right: app.` }, { type: "image", data: pngBuffer(image).toString("base64"), mimeType: "image/png" });

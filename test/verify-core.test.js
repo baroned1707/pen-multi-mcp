@@ -457,3 +457,12 @@ test("the verdict says what was not checked, so a MATCH is not read as covering 
   assert.match(lines[2], /^Verdict: MATCH \(not checked: font size, font weight\) — 0 high/);
   assert.match(lines[3], /A MATCH says nothing about these\./);
 });
+
+test("code-to-design: number tokens only when one token has the value; a design edited since the last verify is flagged", async () => {
+  const { numberTokens, editLines } = await import("../src/verify/reverse.js");
+  const t = numberTokens({ s16: { type: "number", value: 16 }, r16: { type: "number", value: 16 }, fs24: { type: "number", value: 24 }, ink: { type: "color", value: "#000" } });
+  assert.deepEqual([...t], [[24, "$fs24"]]);
+  const lines = editLines({ edits: [{ n: 1, op: 'Update("a", {"fill":"$ink"})', why: "x" }], skipped: [] }, { designChanged: true });
+  assert.match(lines.join("\n"), /⚠ The design was also edited since this frame's last verify/);
+  assert.match(lines.join("\n"), /1\. Update\("a", \{"fill":"\$ink"\}\) {2}\/\/ x/);
+});

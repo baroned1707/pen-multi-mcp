@@ -363,3 +363,27 @@ test("iframes: hidden ones are not read; a scrolled frame shows only what is vis
     other.close();
   }
 });
+
+test("code-to-design: proposed edits for clear causes; applied to a copy of the design, those differences are gone", async () => {
+  await call(client, "save", { filePath: file });
+  const copy = path.join(dir, "follow-code.pen");
+  fs.copyFileSync(file, copy);
+  const src = { kind: "web", url: url("drift.html") };
+  const res = await call(client, "verify", { filePath: copy, target: "Checkout · light", source: src, direction: "code-to-design", crops: 0 });
+  const t = text(res);
+  assert.match(t, /## Proposed design edits \(code → design\)/);
+  assert.match(t, /Update\("\w+", \{"fill":"#DC2626"\}\) {2}\/\/ the code's text color/);
+  assert.match(t, /Update\("\w+", \{"fontSize":24\}\) {2}\/\/ the code's font size/);
+  assert.match(t, /Update\("\w+", \{"enabled":false\}\) {2}\/\/ the code no longer shows it — hidden, not deleted/);
+  assert.match(t, /Insert\("\w+", \{"type":"text","name":"Old promo banner","content":"Old promo banner"/);
+  assert.match(t, /No edit proposed for: .*layout: the cause \(gap, padding, order, sizing\) is not clear/);
+  assert.doesNotMatch(t, /Fix the high findings first/);
+  const ops = [...t.matchAll(/^\d+\. ((?:Update|Insert)\(.*\))  \/\//gm)].map((m) => m[1]);
+  const applied = await call(client, "execute", { filePath: copy, input: ops.join("\n") });
+  assert.ok(!applied.isError, text(applied));
+  const after = await call(client, "verify", { filePath: copy, target: "Checkout · light", source: src, crops: 0 });
+  const rep = JSON.parse(fs.readFileSync(/- report: (.*)/.exec(text(after))[1], "utf8"));
+  const left = rep.findings.map((f) => f.kind);
+  for (const k of ["text-color", "font-size", "missing"]) assert.ok(!left.includes(k), `${k} fixed in the design: ${left.join(", ")}`);
+  assert.ok(!rep.findings.some((f) => f.kind === "extra" && /Old promo banner/.test(f.message)), "the promo text now exists in the design");
+});
