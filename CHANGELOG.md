@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Context metrics (`src/metrics/context.js`): size, repeated facts and completeness of what inspect gives agents. `npm run bench:context` measures real files against any checkout (`PEN_MULTI_SERVER`); the v1.2.0 baseline is in `bench/results/` (inspect: 2.4–3.9k tokens per screen, 29–42% of facts repeated). `npm run eval` runs real agents on three fixture tasks (port, design update, fix) and is a dry run unless `--run`.
+
 ## 1.2.0 — 2026-09-28
 
 - `port`: a durable queue for porting a design screen by screen until MATCH (plan / next with claims for parallel agents / done only on a fresh MATCH / skip / block / status); verify records each run on it.
