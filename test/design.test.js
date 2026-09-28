@@ -276,3 +276,13 @@ test("inspect attaches a labelled render the first time a node is inspected, the
   assert.equal(images(await call(client, "inspect", { filePath: file, target, detail: "summary", image: true })), 1);
   assert.ok(!fs.existsSync(path.join(dir, "design-verify")), "nothing is written into the project");
 });
+
+test("inspect on a component gives its API: slots, overrides used by instances, family, code", async () => {
+  const t = text(await call(client, "inspect", { filePath: file, target: "C/Button", image: false }));
+  assert.match(t, /## Component API: C\/Button/);
+  assert.match(t, /- Slots: none/);
+  assert.match(t, /- Instances: \d+; overridden: Label \[text\] in \d+.* \(of \d+\)/);
+  assert.match(t, /- Family C\/\*: .*C\/Dot \(\w+, \d+ instances\)/);
+  assert.match(t, /- Code: not mapped — mark the code definition with data-pen="\w+"/);
+  assert.match(t, /## Outline/, "the outline stays, for whoever builds the component");
+});

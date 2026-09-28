@@ -121,6 +121,8 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
     const frames = framesOf(analysis);
     const exact = frames.filter((c) => c.id === wanted || c.name === wanted);
     if (exact.length === 1) return { id: exact[0].id, frame: exact[0], analysis };
+    const comp = analysis.components.filter((c) => c.name === wanted);
+    if (comp.length === 1) return { id: comp[0].id, frame: null, analysis };
     const lower = wanted.toLowerCase();
     // Exact name matches win over partial ones; two frames with the same name are still ambiguous.
     const loose = exact.length ? exact : frames.filter((c) => c.row.code?.toLowerCase() === lower || c.name.toLowerCase().includes(lower));
@@ -203,6 +205,36 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
     } catch {
       return null;
     }
+  }
+
+  /**
+   * What an instance of a component can change: slots, the descendants real instances override
+   * (and how often), its family (same name prefix), instance count and code mapping.
+   */
+  async function componentApi(target, run, model, map) {
+    const id = model.root.id;
+    const lines = [`## Component API: ${model.root.name ?? id}`];
+    const slots = [...model.nodes.values()].filter((n) => n.slot);
+    lines.push(`- Slots: ${slots.length ? slots.map((n) => `${n.name ?? n.id} (${n.id})`).join(", ") : "none"}`);
+    const res = await run(`Print("O", JSON.stringify(Get((n) => n.type === "ref" && n.ref === ${JSON.stringify(id)} ? Object.keys(n.descendants || {}) : undefined).filter(Boolean)))`);
+    const lists = res.error ? [] : JSON.parse(/O (.*)/.exec(res.text ?? "")?.[1] ?? "[]");
+    const freq = new Map();
+    for (const keys of lists) for (const k of new Set(keys)) freq.set(k, (freq.get(k) ?? 0) + 1);
+    const named = [...freq].sort((a, b) => b[1] - a[1]).map(([k, c]) => {
+      const n = model.nodes.get(k) ?? model.nodes.get(k.split("/").at(-1));
+      return `${n ? `${n.name ?? n.id} [${n.type}]` : k} in ${c}`;
+    });
+    lines.push(`- Instances: ${lists.length}${lists.length ? `; overridden: ${named.length ? named.slice(0, 12).join(", ") : "nothing"} (of ${lists.length})` : ""}`);
+    const cached = await analysisOf(target, { cachedOnly: true });
+    const cut = (model.root.name ?? "").lastIndexOf("/");
+    if (cached && cut > 0) {
+      const prefix = model.root.name.slice(0, cut + 1);
+      const family = cached.analysis.components.filter((c) => c.name.startsWith(prefix) && c.id !== id);
+      if (family.length) lines.push(`- Family ${prefix}*: ${family.map((c) => `${c.name} (${c.id}, ${c.instances} instances)`).join(", ")} — in code, often one component with a variant prop`);
+    }
+    const code = map.component(id);
+    lines.push(`- Code: ${code ? `${code.code} (${code.file}${code.line ? `:${code.line}` : ""})` : `not mapped — mark the code definition with data-pen="${id}" (or "pen:${id}")`}`);
+    return lines;
   }
 
   /** Components and tokens of a model mapped to the project's code, with what is missing. */
@@ -352,6 +384,7 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
         lines.push("", "## Outline", ...outline(model, { depth, maxLines, flavor, continueWith: more }));
       } else {
         const map = codeMapping(target, model);
+        if (model.root.reusable) lines.push("", ...(await componentApi(target, run, model, map)));
         lines.push("", ...map.lines);
         const o = { compact: true, codeName: map.codeName, component: map.component };
         const defaults = textDefaults(model, o);
