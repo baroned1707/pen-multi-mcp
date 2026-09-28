@@ -26,9 +26,9 @@ Repeat until `port next` says nothing is left:
 
 1. `port({ action: "next", claim: "<your name>" })` — gives the frame id, page, state setup and the last findings.
 2. `inspect` it with the given `savePath`; re-read that file after compaction instead of re-inspecting.
-3. Implement it in the existing code: the design is the source of truth; rebuild shells, navigation and components whose structure differs; mark elements with `data-pen="<address>"` (web) / `testID="pen:<address>"` (React Native).
+3. Implement it in the existing code: the design is the source of truth; rebuild shells, navigation and components whose structure differs; mark elements with `data-pen="<address>"` (web) / `testID="pen:<address>"` (React Native). Reuse what inspect maps: a line `Name → Button (src/Button.tsx:4)` is that code component, and tokens show under their code names. When inspect lists a component as not mapped and the code has it, mark its definition with `data-pen="<component id>"` once; otherwise build it once as a component and reuse it.
 4. `verify({ target: "<id>", source: { kind: "web" } })` (routes and states come from .pen-multi.json).
-5. Fix the high findings first (missing, extra, order), then medium; verify again.
+5. Fix the high findings first (missing, extra, order), then medium; each finding ends with `→ file:line` where the code is, and names the token to use. Verify again.
 6. MATCH → `port({ action: "done", id })`. Out of attempts (to retry, re-run `plan` with a higher `maxAttempts`), or blocked by something only the user can decide → `port({ action: "block", id, reason })`, then continue with `next`.
 
 Never report a screen as done without `port done` succeeding. Never stop while `next` hands out work.
