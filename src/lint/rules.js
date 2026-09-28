@@ -122,16 +122,32 @@ export function lintScreen(model, doc = {}) {
   };
 
   // The first opaque layer painted after n (later siblings of n and of its ancestors) covering most of it.
+  // n's box as far as clipping ancestors let it show.
+  const visibleBox = (n) => {
+    let { x, y, w, h } = n.abs;
+    for (let p = parentOf(n); p; p = parentOf(p)) {
+      if (!p.clip) continue;
+      const c = p.abs;
+      const x2 = Math.min(x + w, c.x + c.w), y2 = Math.min(y + h, c.y + c.h);
+      x = Math.max(x, c.x);
+      y = Math.max(y, c.y);
+      w = Math.max(0, x2 - x);
+      h = Math.max(0, y2 - y);
+    }
+    return { x, y, w, h };
+  };
   const coveredBy = (n) => {
-    const area = n.abs.w * n.abs.h;
+    // Only the part that shows can be covered: text below a scroll fold is hidden by the clip.
+    const v = visibleBox(n);
+    const area = v.w * v.h;
     if (!area) return null;
     for (let cur = n, p = parentOf(n); p; cur = p, p = parentOf(p)) {
       for (const sib of p.children.slice(p.children.indexOf(cur) + 1)) {
         if (sib.hidden || NOT_CONTENT.has(sib.type) || sib.type === "text") continue;
         const paint = paintOf(sib.resolved?.fill ?? sib.fill);
         if (!paint?.color || translucent(sib)) continue;
-        const w = Math.min(n.abs.x + n.abs.w, sib.abs.x + sib.abs.w) - Math.max(n.abs.x, sib.abs.x);
-        const h = Math.min(n.abs.y + n.abs.h, sib.abs.y + sib.abs.h) - Math.max(n.abs.y, sib.abs.y);
+        const w = Math.min(v.x + v.w, sib.abs.x + sib.abs.w) - Math.max(v.x, sib.abs.x);
+        const h = Math.min(v.y + v.h, sib.abs.y + sib.abs.h) - Math.max(v.y, sib.abs.y);
         if (w > 0 && h > 0 && (w * h) / area >= 0.5) return sib;
       }
       if (p === model.root) break;

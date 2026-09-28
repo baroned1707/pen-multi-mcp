@@ -292,3 +292,13 @@ test("web capture turns oklch, hsl and color-mix into sRGB so colors are always 
   const p = snap.elements.find((e) => e.text === "Colors");
   assert.deepEqual([p.fg, p.bg, p.borderColor, snap.pageBg], ["rgba(43, 127, 255, 1)", "rgba(128, 0, 128, 1)", "rgb(255, 0, 0)", "rgba(251, 250, 248, 1)"]);
 });
+
+test("a password is never captured as text", async () => {
+  fs.writeFileSync(path.join(dir, "pw.html"), `<body style="margin:0"><input type="password" value="hunter2secret"><input type="password" placeholder="Password"></body>`);
+  const cap = await call(client, "capture", { source: { kind: "web", url: url("pw.html") }, savePath: "pw-capture" });
+  assert.ok(!cap.isError, text(cap));
+  const raw = fs.readFileSync(path.join(dir, "pw-capture.json"), "utf8");
+  assert.doesNotMatch(raw, /hunter2/);
+  const snap = JSON.parse(raw);
+  assert.deepEqual(snap.elements.filter((e) => e.text).map((e) => e.text), ["•••••••••••••".slice(0, 12), "Password"]);
+});

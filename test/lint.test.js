@@ -224,3 +224,14 @@ test("covered: a text under a later opaque layer is reported; one under a transl
   assert.deepEqual(f.map((x) => x.id), ["t"]);
   assert.match(f[0].message, /hidden under "Badge"/);
 });
+
+test("covered: a row below a scroll fold is hidden by the clip, not by the tab bar after it", async () => {
+  const { lintScreen } = await import("../src/lint/rules.js");
+  const root = mk("root", "frame", { x: 0, y: 0, w: 390, h: 844 }, { fill: "#FFFFFF" });
+  const list = mk("list", "frame", { x: 0, y: 0, w: 390, h: 760 }, { clip: true });
+  const row = mk("row", "text", { x: 16, y: 780, w: 200, h: 20 }, { content: "Row 12", fill: "#111111", clipped: "fully" });
+  const bar = mk("bar", "frame", { x: 0, y: 760, w: 390, h: 84 }, { name: "Tab bar", fill: "#FFFFFF" });
+  put(list, row);
+  put(root, list, bar);
+  assert.deepEqual(lintScreen(model(root, list, row, bar)).filter((x) => x.rule === "covered"), []);
+});

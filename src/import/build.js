@@ -96,6 +96,7 @@ export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight }
   // A paragraph's own boxes (inline code, badges) must paint below its text: a text spec waits
   // until the elements inside it are emitted.
   const pending = [];
+  let seq = 0; // spec keys are unique even while texts wait in `pending`
   const isInside = (el, ancestorIndex) => {
     for (let p = el.parent !== undefined ? byIndex.get(el.parent) : null; p; p = p.parent !== undefined ? byIndex.get(p.parent) : null) if (p.i === ancestorIndex) return true;
     return false;
@@ -115,7 +116,7 @@ export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight }
     const x = r2(own.x - pbox.x), y = r2(own.y - pbox.y), w = r2(own.w), h = r2(own.h);
     const shifted = own.y - el.box.y;
     const moved = (b) => (b ? { ...b, y: b.y + shifted } : b);
-    const key = `n${specs.length}`;
+    const key = `n${seq++}`;
     const name = nameOf(el);
     if (text && !bg && !border && !visual) {
       const props = { type: "text", name, content: text, textGrowth: "fixed-width", ...textPlacement({ ...el, box: own, contentBox: moved(el.contentBox), textBox: moved(el.textBox) }, pbox) };
@@ -140,7 +141,7 @@ export function buildSpecs(snapshot, { tokens = [], images = null, frameHeight }
       // A painted element with its own text: the text goes inside it.
       const tprops = { type: "text", name: `${name} text`, content: text, textGrowth: "fixed-width", ...textPlacement({ ...el, box: own, contentBox: moved(el.contentBox), textBox: moved(el.textBox) }, own) };
       Object.assign(tprops, textStyle(el, tokens));
-      specs.push({ key: `n${specs.length}`, parent: key, props: tprops });
+      specs.push({ key: `n${seq++}`, parent: key, props: tprops });
     }
   }
   flushPending(null);

@@ -196,7 +196,9 @@ function collect(limit) {
     const lh = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) || 16) * 1.2;
     measure.font = cs.font;
     const w = Math.min(content.w, measure.measureText(text).width);
-    const y = el.tagName === "TEXTAREA" ? content.y : content.y + (content.h - lh) / 2;
+    // Textareas and list-box selects (multiple / size > 1) draw from the top; one-line controls centered.
+    const top = el.tagName === "TEXTAREA" || (el.tagName === "SELECT" && (el.multiple || el.size > 1));
+    const y = top ? content.y : content.y + (content.h - lh) / 2;
     const x = cs.textAlign === "center" ? content.x + (content.w - w) / 2 : cs.textAlign === "right" || cs.textAlign === "end" ? content.x + content.w - w : content.x;
     return { x, y, w, h: lh };
   };
@@ -214,7 +216,8 @@ function collect(limit) {
     if (shown) {
       let text = "";
       let merged = false;
-      if (el.tagName === "INPUT") text = TEXT_INPUT.test(el.type) ? el.value || el.placeholder || "" : "";
+      // A password is never captured (it would land in snapshots and imported designs): dots stand in.
+      if (el.tagName === "INPUT") text = !TEXT_INPUT.test(el.type) ? "" : el.type === "password" ? (el.value ? "•".repeat(Math.min(12, el.value.length)) : el.placeholder || "") : el.value || el.placeholder || "";
       else if (el.tagName === "TEXTAREA") text = el.value || el.placeholder || "";
       else if (el.tagName === "SELECT") text = el.selectedOptions?.[0]?.text ?? "";
       else if (!owned.has(el) && !ICON_FONT.test(cs.fontFamily)) {
