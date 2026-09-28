@@ -1,6 +1,7 @@
 // overview and inspect against the real engine, on a document built here with the cases that
 // tripped agents in real projects.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -83,7 +84,12 @@ test("overview focus lists frame ids; inspect by name resolves and reports every
   assert.match(t, /1\. List \(\w+\) — "Alpha" "Beta" "Gamma" "Delta"/);
   assert.match(t, /2\. Primary \(\w+\) — <C\/Dot> "Pay now"/, "instance content with its override");
   assert.match(t, /×3 more like Row \(content: "Beta", "Gamma", "Delta"\)/);
-  assert.match(t, /Title \[text\] .*"Checkout" Inter 18 700 lh 22.5px · color \$ink\(#111111 light, #EEEEEE dark\)/);
+  // detail "normal" (default): this frame's theme only; shared font and text color stated once.
+  assert.match(t, /Text defaults \(left out of the lines below\): font Inter · color \$ink\(#111111\)/);
+  assert.match(t, /Title \[text\] .*"Checkout" 18 700 lh 22\.5px\n/);
+  assert.doesNotMatch(t, /#EEEEEE/, "the dark value is not shown for a light frame");
+  const full = text(await call(client, "inspect", { filePath: file, target: "Checkout · light", detail: "full" }));
+  assert.match(full, /Title \[text\] .*"Checkout" Inter 18 700 lh 22.5px · color \$ink\(#111111 light, #EEEEEE dark\)/, "full keeps today's outline");
   assert.match(t, /Primary \[frame ← C\/Button\]/);
   assert.match(t, /Too tall .*⚠ partially clipped/);
   assert.match(t, /tw: .*border-b-\[1px\]/);
@@ -100,11 +106,20 @@ test("inspect resolves a dark frame's colors in its own theme", async () => {
   assert.deepEqual(body.duplicateNames, ["Home · dark/Content/List/Row"]);
 });
 
-test("ambiguous names list the candidates instead of guessing", async () => {
-  const res = await call(client, "inspect", { filePath: file, target: "Home" });
+test("ambiguous names list the candidates instead of guessing (json)", async () => {
+  const res = await call(client, "inspect", { filePath: file, target: "Home", format: "json" });
   assert.equal(res.isError, true);
   assert.match(text(res), /matches 2 frames/);
   assert.match(text(res), /Home · light \(390, light\) → \w+/, "each candidate shows its width and theme");
+});
+
+test("a screen name with several frames: one base frame in full, the others as differences", async () => {
+  const res = await call(client, "inspect", { filePath: file, target: "Home", image: false });
+  assert.ok(!res.isError, text(res));
+  const t = text(res);
+  assert.match(t, /"Home" is 2 frames: Home · light \(\w+\) in full, the others as differences below\./);
+  assert.match(t, /## Variants \(base above: Home · light \(\w+, 390, light\)/);
+  assert.match(t, /- Home · dark \(\w+, 390, dark\): same nodes and values; only token values differ \(theme\)\./);
 });
 
 test("savePath writes the spec with the .pen's hash, and flags a stale previous spec", async () => {
@@ -233,4 +248,49 @@ test("a fresh agent's second call reuses the analysis, and inspect by id right a
   } finally {
     await fresh.close();
   }
+});
+
+test("inspect maps components and tokens to the project's code", async () => {
+  fs.mkdirSync(path.join(dir, "web"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "web", "Button.tsx"), `export function Button({ children }) {\n  return <button data-pen="C/Button">{children}</button>;\n}\n`);
+  fs.writeFileSync(path.join(dir, "web", "tokens.css"), `:root { --text-strong: #111111; }\n.dark { --text-strong: #EEEEEE; }\n`);
+  fs.writeFileSync(path.join(dir, ".pen-multi.json"), JSON.stringify({ tokens: { file: "web/tokens.css" } }));
+  execFileSync("git", ["init", "-q"], { cwd: dir }); // markers are searched in the project's repository
+  try {
+    const t = text(await call(client, "inspect", { filePath: file, target: "Checkout · light" }));
+    assert.match(t, /Components: 1 of \d+ used here map to code: C\/Button → Button \(web\/Button\.tsx:2\)/);
+    assert.match(t, /Not mapped: .*C\/\w+ ×\d \(id \w+\)/);
+    assert.match(t, /Primary → Button \(web\/Button\.tsx:2\) · /);
+    assert.match(t, /color --text-strong\(#111111\)/, "the $ink token under its code name");
+  } finally {
+    fs.rmSync(path.join(dir, ".pen-multi.json"));
+  }
+});
+
+test("inspect attaches a labelled render the first time a node is inspected, then only on request", async () => {
+  const target = "Home · dark";
+  const images = (res) => res.content.filter((c) => c.type === "image").length;
+  const first = await call(client, "inspect", { filePath: file, target, detail: "summary" });
+  assert.equal(images(first), 1);
+  assert.match(text(first), /Design render: Home · dark \(\w+\)\. Use it for the overall look; take every number from the outline\./);
+  assert.equal(first.content[1].type, "text", "the label comes right before the image");
+  assert.equal(images(await call(client, "inspect", { filePath: file, target, detail: "summary" })), 0);
+  assert.equal(images(await call(client, "inspect", { filePath: file, target, detail: "summary", image: true })), 1);
+  assert.ok(!fs.existsSync(path.join(dir, "design-verify")), "nothing is written into the project");
+});
+
+test("inspect on a component gives its API: slots, overrides used by instances, family, code", async () => {
+  const t = text(await call(client, "inspect", { filePath: file, target: "C/Button", image: false }));
+  assert.match(t, /## Component API: C\/Button/);
+  assert.match(t, /- Slots: none/);
+  assert.match(t, /- Instances: \d+; overridden: Label \[text\] in \d+.* \(of \d+\)/);
+  assert.match(t, /- Family C\/\*: .*C\/Dot \(\w+, \d+ instances\)/);
+  assert.match(t, /- Code: not mapped — mark the code definition with data-pen="\w+"/);
+  assert.match(t, /## Outline/, "the outline stays, for whoever builds the component");
+});
+
+test("a partial name match is still ambiguous, not variants of another screen", async () => {
+  const res = await call(client, "inspect", { filePath: file, target: "ome", image: false });
+  assert.equal(res.isError, true, text(res));
+  assert.match(text(res), /matches \d+ frames/);
 });

@@ -445,3 +445,26 @@ test("a missing wrapper whose main contents are present is medium and says so", 
   assert.equal(f.severity, "medium");
   assert.match(f.message, /1 of its contents are present \(Bar\): the container itself is what differs/);
 });
+
+test("the verdict says what was not checked, so a MATCH is not read as covering it", async () => {
+  const { renderReport } = await import("../src/verify/report.js");
+  const lines = renderReport({
+    meta: { screen: "S", frameId: "x", sourceLabel: "native android", viewport: "390×844" },
+    summary: { verdict: "match", high: 0, medium: 0, low: 0, matched: 3, compared: 3, by: { marker: 3, text: 0, geometry: 0 }, score: 100 },
+    findings: [],
+    notCompared: ["font size", "font weight"],
+  });
+  assert.match(lines[2], /^Verdict: MATCH \(not checked: font size, font weight\) — 0 high/);
+  assert.match(lines[3], /A MATCH says nothing about these\./);
+});
+
+test("code-to-design: number tokens only when one token has the value; a design edited since the last verify is flagged", async () => {
+  const { numberTokens, editLines } = await import("../src/verify/reverse.js");
+  const vars = { s16: { type: "number", value: 16 }, r16: { type: "number", value: 16 }, fs24: { type: "number", value: 24 }, fs16: { type: "number", value: 16 }, ink: { type: "color", value: "#000" } };
+  assert.deepEqual([...numberTokens(vars, ["fs24", "fs16"])], [[24, "$fs24"], [16, "$fs16"]], "only tokens the document uses for this property");
+  assert.deepEqual([...numberTokens(vars, ["s16", "r16"])], [], "a value two candidates share stays a number");
+  assert.deepEqual([...numberTokens(vars, [])], [], "a property the document never puts on tokens gets none");
+  const lines = editLines({ edits: [{ n: 1, op: 'Update("a", {"fill":"$ink"})', why: "x" }], skipped: [] }, { designChanged: true });
+  assert.match(lines.join("\n"), /⚠ The design was also edited since this frame's last verify/);
+  assert.match(lines.join("\n"), /1\. Update\("a", \{"fill":"\$ink"\}\) {2}\/\/ x/);
+});

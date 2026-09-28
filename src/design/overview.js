@@ -157,6 +157,23 @@ const matches = (focus, row) => {
   return row.code?.toLowerCase() === f || row.screen.toLowerCase().includes(f) || Object.values(row.cells).flat().some((c) => c.id === focus);
 };
 
+/**
+ * Screens whose name is another screen's name plus more parts ("S1 · Map · two pins" next to
+ * "S1 · Map") are usually states the names do not mark, and cells holding two frames of the same
+ * theme mix frames that differ in more than width and theme. Both hide states from the matrix,
+ * port and verify; this says so and how to name them. It does not guess the states itself.
+ */
+export function stateHint(rows) {
+  const screens = new Set(rows.map((r) => r.screen));
+  const looks = rows.filter((r) => !r.state && [...screens].some((s) => s !== r.screen && r.screen.startsWith(`${s} · `)));
+  const mixed = rows.filter((r) => Object.values(r.cells).some((cs) => new Set(cs.map((c) => c.theme)).size < cs.length));
+  if (!looks.length && !mixed.length) return null;
+  const parts = [];
+  if (looks.length) parts.push(`${looks.length} screen(s) look like states of another screen (${looks.slice(0, 3).map((r) => `"${r.screen}"`).join(", ")}${looks.length > 3 ? ", …" : ""})`);
+  if (mixed.length) parts.push(`${mixed.length} row(s) hold two frames of the same width and theme (${mixed.slice(0, 3).map((r) => `"${r.screen}"`).join(", ")})`);
+  return `⚠ ${parts.join("; ")}. Name a state after an em dash ("Screen — state · theme"), or add a screenPattern to .pen-multi.json: a regex with named groups screen, state, theme, width, code, e.g. "^(?<screen>S\\d+ · [^·]+)(?: · (?<state>.+?))?(?: · (?<theme>sáng|tối))?$".`;
+}
+
 /** Text rendering, capped at maxLines; `focus` narrows to matching screens and their flows. */
 export function renderOverview(a, { file, focus, maxRows = 60, maxLines = 250 } = {}) {
   const L = [];
@@ -178,6 +195,8 @@ export function renderOverview(a, { file, focus, maxRows = 60, maxLines = 250 } 
     for (const r of rows) for (const [w, cs] of Object.entries(r.cells)) for (const c of cs) L.push(`  ${c.name} → id ${c.id} (${w}${c.theme ? `, ${c.theme}` : ""})`);
   }
   if (a.matrix.unparsed.length) L.push(`Unparsed screen names: ${a.matrix.unparsed.map((u) => u.name).join("; ")}`);
+  const hint = stateHint(a.matrix.rows);
+  if (hint) L.push(hint);
   L.push("");
   if (!focus) {
     L.push(`## Bands (top to bottom)`);

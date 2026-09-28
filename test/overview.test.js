@@ -60,3 +60,11 @@ test("output is capped", () => {
   assert.equal(lines.length, 6);
   assert.match(lines[5], /output cut at 5 lines/);
 });
+
+test("stateHint: screens that extend another screen's name, and cells with two frames of one theme", async () => {
+  const { stateHint } = await import("../src/design/overview.js");
+  const row = (screen, cells = { 390: [{ theme: "light" }] }, state = null) => ({ screen, state, cells });
+  assert.equal(stateHint([row("Home"), row("Settings")]), null);
+  const h = stateHint([row("S1 · Map"), row("S1 · Map · two pins"), row("S2", { 390: [{ theme: "light" }, { theme: "light" }] })]);
+  assert.match(h, /1 screen\(s\) look like states of another screen \("S1 · Map · two pins"\); 1 row\(s\) hold two frames of the same width and theme \("S2"\)\. Name a state after an em dash/);
+});

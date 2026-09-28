@@ -3,7 +3,7 @@
 import { deltaE, parseColor, toHex } from "../verify/color.js";
 
 const UNITLESS = /weight|opacity|ratio|line-?height|z-?index|scale|flex|order/i;
-const kebab = (s) =>
+export const kebab = (s) =>
   String(s)
     .replace(/^\$/, "")
     .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
@@ -51,7 +51,7 @@ const cssValue = (t, v) => {
   if (t.type === "string" && /\s/.test(v) && !/^["']/.test(v) && !v.includes(",")) return `"${v}"`;
   return String(v);
 };
-const baseTheme = (n) => (n.themes.includes("light") ? "light" : n.themes[0]);
+export const baseTheme = (n) => (n.themes.includes("light") ? "light" : n.themes[0]);
 /** The value for the base selector: the default, else the first (usually light) theme's. */
 const baseValue = (n, t) => t.values.default ?? t.values[baseTheme(n)] ?? Object.values(t.values)[0];
 
@@ -188,12 +188,13 @@ function resolveVars(found, n) {
   return out;
 }
 
-const sameValue = (t, design, code) => {
+export const sameValue = (t, design, code) => {
   if (t.type === "color") {
     const a = parseColor(design), b = parseColor(code);
     return a && b ? deltaE(a, b) < 1 : String(design).toLowerCase() === String(code).toLowerCase();
   }
-  if (t.type === "number") return Math.abs(Number(design) - parseFloat(code)) < 0.01;
+  // 1rem is not 1: a unit other than px means a different value.
+  if (t.type === "number") return !/[a-z%]\s*$/i.test(String(code).replace(/px\s*$/i, "")) && Math.abs(Number(design) - parseFloat(code)) < 0.01;
   return String(design).replace(/^["']|["']$/g, "") === String(code).replace(/^["']|["']$/g, "");
 };
 

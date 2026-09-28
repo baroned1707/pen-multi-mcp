@@ -3,9 +3,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { ReadError } from "../design/read.js";
+import { buildModel } from "../design/model.js";
+import { ReadError, readSubtree } from "../design/read.js";
 import { colorTokens } from "../lint/rules.js";
 import { readPng } from "../verify/image.js";
+import { USAGE_SNIPPET, propertyNumbers } from "../verify/reverse.js";
 import { slug } from "../verify/tools.js";
 import { buildSpecs, imageCropper, safeName, snippets, tokenOrHex } from "./build.js";
 
@@ -17,6 +19,84 @@ const ago = (iso) => {
 };
 
 export function registerImportTools({ tool, z, route, design, executeSnippet, optionalFilePath, capture, source, conventions, saver }) {
+  /**
+   * Auto-layout frames are kept only where the engine lays their children out where the page had
+   * them (within 2px, relative to the frame); the others go back to layout "none" with each child
+   * at its measured x/y.
+   */
+  async function checkAutoLayout(target, rootId, specs, ids) {
+    const auto = specs.filter((sp) => sp.auto && ids[sp.key]);
+    if (!auto.length) return { line: "Positions are absolute (layout none): no container could be imported as auto layout (flexbox, or children stacked with even gaps).", kept: 0, failed: 0 };
+    const model = buildModel(await readSubtree(design.reader(target), rootId));
+    const kidsOf = new Map();
+    for (const sp of specs) if (sp.parent) (kidsOf.get(sp.parent) ?? kidsOf.set(sp.parent, []).get(sp.parent)).push(sp);
+    const failed = [];
+    for (const sp of auto) {
+      const box = model.nodes.get(ids[sp.key])?.abs;
+      const off = (kidsOf.get(sp.key) ?? []).some((k) => {
+        const kb = model.nodes.get(ids[k.key])?.abs;
+        return !box || !kb || Math.abs(kb.x - box.x - (k.props.x ?? 0)) > 2 || Math.abs(kb.y - box.y - (k.props.y ?? 0)) > 2;
+      });
+      if (off) failed.push(sp);
+    }
+    if (failed.length) {
+      const ops = failed.flatMap((sp) => [
+        `Update(${JSON.stringify(ids[sp.key])}, { layout: "none" })`,
+        ...(kidsOf.get(sp.key) ?? []).filter((k) => ids[k.key]).map((k) => `Update(${JSON.stringify(ids[k.key])}, { x: ${k.props.x ?? 0}, y: ${k.props.y ?? 0} })`),
+      ]);
+      const out = await executeSnippet({ filePath: target.file, input: ops.join("\n") });
+      if (out.isError) return { line: `Auto layout: ${auto.length - failed.length} frames kept; putting ${failed.length} back to absolute failed: ${out.content.map((c) => c.text ?? "").join(" ").slice(0, 200)}` };
+    }
+    return { line: `Auto layout: ${auto.length - failed.length} containers are auto-layout frames (flexbox, or children stacked with even gaps); ${failed.length} went back to absolute placement because the engine's layout did not reproduce the page within 2px; the other frames are absolute.`, kept: auto.length - failed.length, failed: failed.length };
+  }
+
+  /** What is left to clean up in an import: raw colors and sizes no token has. */
+  function cleanliness(specs) {
+    const raw = (v) => typeof v === "string" && v.startsWith("#");
+    const colors = specs.filter((x) => raw(x.props.fill) || raw(x.props.stroke)).length;
+    const sizes = specs.filter((x) => typeof x.props.fontSize === "number" || typeof x.props.cornerRadius === "number").length;
+    // Three or more sibling frames with the same size and the same kinds of children: likely one
+    // component drawn several times (list rows, cards) that the code has not marked.
+    const kids = new Map();
+    for (const x of specs) if (x.parent) (kids.get(x.parent) ?? kids.set(x.parent, []).get(x.parent)).push(x);
+    const repeated = [];
+    for (const [, list] of kids) {
+      const groups = new Map();
+      for (const x of list) {
+        if (x.props.type !== "frame") continue;
+        const sig = `${Math.round(x.props.width)}x${Math.round(x.props.height)}:${(kids.get(x.key) ?? []).map((c) => c.props.type).join(",")}`;
+        (groups.get(sig) ?? groups.set(sig, []).get(sig)).push(x);
+      }
+      for (const g of groups.values()) if (g.length >= 3) repeated.push(`${g.length}× "${g[0].props.name}"`);
+    }
+    return `Not on tokens yet: ${colors} node(s) with raw colors, ${sizes} with raw font sizes or radii (no token has those values).${repeated.length ? ` Repeated like a component but not one: ${repeated.slice(0, 5).join(", ")} — make it a component, or mark the code's with data-pen="<component id>".` : ""} Elements whose marker names a design component come in as its instances.`;
+  }
+
+  /**
+   * Components the snapshot's markers name (by id or exact name): Map(marker -> { id, texts }),
+   * texts being the component's visible text nodes in order, for instance overrides.
+   */
+  async function markedComponents(target, snapshot) {
+    const markers = new Set(snapshot.elements.map((e) => e.marker && String(e.marker).replace(/^.*:id\//, "").replace(/^pen:/, "")).filter(Boolean));
+    const out = new Map();
+    if (!markers.size) return out;
+    const { analysis } = await design.analysisOf(target);
+    for (const c of analysis.components) {
+      const key = markers.has(c.id) ? c.id : markers.has(c.name) ? c.name : null;
+      if (!key) continue;
+      const model = buildModel(await readSubtree(design.reader(target), c.id));
+      const texts = [];
+      const walk = (n) => {
+        if (n.hidden) return;
+        if (n.type === "text") texts.push({ id: n.id, content: n.resolved?.content ?? n.content });
+        n.children.forEach(walk);
+      };
+      walk(model.root);
+      out.set(key, { id: c.id, name: c.name, texts });
+    }
+    return out;
+  }
+
   tool(
     "import_ui",
     "Rebuild a running screen of the app as an editable frame in the .pen (code → design): painted boxes become frames (fill, radius, border), texts become text nodes (content, size, weight, family, color, line height), images and icons become crops of the screenshot, placed where the UI draws them; colors that equal a document token use the token. Use it to bring an implemented screen into the design, to start a design from existing code, or to compare side by side. Sources as for verify (web, probe, native). The new frame is placed right of the existing content.",
@@ -53,26 +133,35 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
       const cropper = images && shot ? imageCropper({ img: shot, scale, penFile: target.file, prefix }) : null;
       const vw = snapshot.viewport?.w ?? width;
       const vh = shot ? shot.height / scale : snapshot.viewport?.h ?? height;
-      const specs = buildSpecs(snapshot, { tokens, images: cropper, frameHeight: vh });
+      const usage = await design.reader(target)(USAGE_SNIPPET);
+      const numbers = propertyNumbers(ctx.variables, usage.text);
+      const components = await markedComponents(target, snapshot);
+      const specs = buildSpecs(snapshot, { tokens, numbers, components, images: cropper, frameHeight: vh });
       const frameName = safeName(name ?? `${snapshot.url ? new URL(snapshot.url).pathname.replace(/^\/+/, "") || "home" : snapshot.platform ?? "screen"} (from code)`);
       const pageBg = tokenOrHex(snapshot.pageBg, tokens) ?? "#FFFFFF";
       const screen = { type: "frame", name: frameName, x: Math.ceil(ctx.right + 200), y: 0, width: Math.round(vw), height: Math.round(vh), layout: "none", clip: true, fill: pageBg, ...(axis ? { theme: { [axis]: theme } } : {}) };
       let rootId = null;
       let created = 0;
+      let ids = {};
       for (const input of snippets({ screen, specs })) {
         const out = await executeSnippet({ filePath: target.file, input });
         const t = out.content.map((c) => c.text ?? "").join("\n");
         if (out.isError) throw new ReadError(`import stopped after ${created} of ${specs.length} nodes${rootId ? ` (partial frame ${rootId})` : ""}: ${t.slice(0, 400)}`);
         rootId ??= /ROOT (\S+)/.exec(t)?.[1];
+        const keys = /^KEYS (.*)$/m.exec(t);
+        if (keys) ids = JSON.parse(keys[1]);
         if (/CLEAN 1/.test(t)) continue;
         const done = /DONE (\d+)/.exec(t);
         if (done) created = Number(done[1]);
       }
+      const layout = await checkAutoLayout(target, rootId, specs, ids);
       return design.wrap(target, [
         `Imported ${created} nodes into a new frame "${frameName}" (${rootId}) at x ${screen.x}, ${Math.round(vw)}×${Math.round(vh)}.`,
-        `${specs.filter((s) => s.props.type === "text").length} texts, ${specs.filter((s) => s.props.fill?.type === "image").length} image crops, ${specs.filter((s) => typeof s.props.fill === "string" && s.props.fill.startsWith("$")).length} fills on tokens${axis ? `, drawn in ${axis} ${theme}` : ""}.`,
+        `${specs.filter((s) => s.props.type === "text").length} texts, ${specs.filter((s) => s.props.fill?.type === "image").length} image crops, ${specs.filter((s) => typeof s.props.fill === "string" && s.props.fill.startsWith("$")).length} fills on tokens, ${specs.filter((s) => s.props.type === "ref").length} component instances${axis ? `, drawn in ${axis} ${theme}` : ""}.`,
+        cleanliness(specs),
         ...(snapshot.truncated ? ["The page has more elements than a capture keeps (6,000): the import is partial; import a narrower state or screen."] : []),
-        "Positions are absolute (layout none): turn sections into auto layout where the design should flow, name the layers, and replace crops with icons or components where they exist. lint the frame to see what is left.",
+        layout.line,
+        "Name the layers, replace crops with icons or components where they exist, and turn the remaining absolute sections into auto layout where the design should flow. lint the frame to see what is left.",
       ]);
     },
   );

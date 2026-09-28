@@ -42,7 +42,7 @@ export function registerPortTools({ tool, z, route, design, optionalFilePath, co
     return best;
   };
 
-  const LOOP = "Loop: inspect the frame (savePath below) → implement it, marking elements with data-pen / testID=\"pen:…\" → verify (target = this id) → fix and verify again until MATCH → port done → port next. After the item's attempts run out it is blocked: say why with port block and move on.";
+  const LOOP = "Loop: inspect the frame (savePath below; it names the code components and tokens to reuse, and lists what is not mapped yet) → implement it, marking elements with data-pen / testID=\"pen:…\" → verify (target = this id) → fix and verify again until MATCH → port done → port next. After the item's attempts run out it is blocked: say why with port block and move on.";
 
   function describeNext(item, file) {
     const conv = conventions(file);
@@ -55,7 +55,7 @@ export function registerPortTools({ tool, z, route, design, optionalFilePath, co
     const last = latestReport(file, item.id);
     if (last) {
       const f = (last.report.findings ?? []).filter((x) => x.severity !== "low").slice(0, 10);
-      lines.push("", `Last verify: ${last.report.summary.verdict.toUpperCase()} (${last.report.summary.high} high, ${last.report.summary.medium} medium) — ${last.path}`, ...f.map((x) => `- [${x.severity}] ${x.message}`));
+      lines.push("", `Last verify: ${last.report.summary.verdict.toUpperCase()} (${last.report.summary.high} high, ${last.report.summary.medium} medium) — ${last.path}`, ...f.map((x) => `- [${x.severity}] ${x.message}${x.token ? ` Design token ${x.token.design}${x.token.code ? ` = ${x.token.code} in code` : ""}.` : ""}${x.code ? ` → ${x.code}` : ""}`));
     }
     lines.push("", `Spec: inspect({ target: ${JSON.stringify(item.id)}, savePath: "design-verify/specs/${slug(item.name)}.json" })`, LOOP);
     return lines;

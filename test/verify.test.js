@@ -2,6 +2,7 @@
 // The faithful page is the design's own HTML export; drifted pages re-create what agents did in
 // practice (old UI kept, shell never ported, sections reordered, wrong color and type).
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +31,7 @@ const kinds = (rep, severity) => rep.findings.filter((f) => f.severity === sever
 
 before(async () => {
   client = await connect({ home: path.join(dir, "home"), cwd: dir, env: { PEN_MULTI_PREWARM: "0" } });
+  execFileSync("git", ["init", "-q"], { cwd: dir }); // a project: markers are searched in its repository
   await exec(`SetVariables({ bg: { type: "color", value: "#FFFFFF" }, ink: { type: "color", value: "#111111" }, brand: { type: "color", value: "#2563EB" } })`);
   await exec(`btn = Insert(document, { type: "frame", name: "C/Button", reusable: true, x: 0, y: -400, width: 358, height: 48, layout: "horizontal", justifyContent: "center", alignItems: "center", fill: "$brand", cornerRadius: 10 });
   Insert(btn, { type: "text", name: "Label", content: "Pay now", fill: "#FFFFFF", fontFamily: "Inter", fontSize: 16, fontWeight: "600" });
@@ -101,6 +103,17 @@ test("drift is reported as exactly the planted differences", async () => {
   const rep = report();
   assert.deepEqual(kinds(rep, "high"), planted.high);
   assert.deepEqual(kinds(rep, "medium"), planted.medium);
+});
+
+test("findings point at the code (file:line from markers) and name the design token; the worst come as close-ups", async () => {
+  const res = await verify({ source: { kind: "web", url: url("drift.html") } });
+  const t = text(res);
+  assert.match(t, /text color: #DC2626 in the UI, #111111 in the design .* Design token \$ink\. → [\w-]+\.html:\d+ \(\+\d+ other places with this marker\)/);
+  const images = res.content.filter((c) => c.type === "image");
+  assert.equal(images.length, 3, "three close-ups by default");
+  assert.match(t, /Finding \d+ \[high\] close-up — left: design, right: app\./);
+  const none = await verify({ source: { kind: "web", url: url("drift.html") }, crops: 0 });
+  assert.equal(none.content.filter((c) => c.type === "image").length, 0);
 });
 
 test("without markers the same differences are found, with a hint to add markers", async () => {
@@ -351,4 +364,28 @@ test("iframes: hidden ones are not read; a scrolled frame shows only what is vis
   } finally {
     other.close();
   }
+});
+
+test("code-to-design: proposed edits for clear causes; applied to a copy of the design, those differences are gone", async () => {
+  await call(client, "save", { filePath: file });
+  const copy = path.join(dir, "follow-code.pen");
+  fs.copyFileSync(file, copy);
+  const src = { kind: "web", url: url("drift.html") };
+  const res = await call(client, "verify", { filePath: copy, target: "Checkout · light", source: src, direction: "code-to-design", crops: 0 });
+  const t = text(res);
+  assert.match(t, /## Proposed design edits \(code → design\)/);
+  assert.match(t, /Update\("\w+", \{"fill":"#DC2626"\}\) {2}\/\/ the code's text color/);
+  assert.match(t, /Update\("\w+", \{"fontSize":24\}\) {2}\/\/ the code's font size/);
+  assert.match(t, /Update\("\w+", \{"enabled":false\}\) {2}\/\/ the code no longer shows it — hidden, not deleted/);
+  assert.match(t, /Insert\("\w+", \{"type":"text","name":"Old promo banner","content":"Old promo banner"/);
+  assert.match(t, /No edit proposed for: .*layout: the cause \(gap, padding, order, sizing\) is not clear/);
+  assert.doesNotMatch(t, /Fix the high findings first/);
+  const ops = [...t.matchAll(/^\d+\. ((?:Update|Insert)\(.*\))  \/\//gm)].map((m) => m[1]);
+  const applied = await call(client, "execute", { filePath: copy, input: ops.join("\n") });
+  assert.ok(!applied.isError, text(applied));
+  const after = await call(client, "verify", { filePath: copy, target: "Checkout · light", source: src, crops: 0 });
+  const rep = JSON.parse(fs.readFileSync(/- report: (.*)/.exec(text(after))[1], "utf8"));
+  const left = rep.findings.map((f) => f.kind);
+  for (const k of ["text-color", "font-size", "missing"]) assert.ok(!left.includes(k), `${k} fixed in the design: ${left.join(", ")}`);
+  assert.ok(!rep.findings.some((f) => f.kind === "extra" && /Old promo banner/.test(f.message)), "the promo text now exists in the design");
 });

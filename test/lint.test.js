@@ -60,7 +60,8 @@ test("lint finds the planted problems, each on the right node", async () => {
   has("default-name", ids.r1);
   has("raw-color", ids.r1, /is the value of \$brand; use the token/);
   has("raw-color", ids.t1, /is the value of \$ink/);
-  assert.match(t, /uneven-spacing .*16px apart except 17px/);
+  // The planted row is 17px off; gaps next to the texts depend on the font's metrics when it loads.
+  assert.match(t, /uneven-spacing .*16px apart except (?:\d+, )*17px/);
   assert.doesNotMatch(t, /#FFFFFF is the value of/, "a color equal to a themed token is not auto-mapped");
   assert.match(t, /\[low\] raw-color .*#FFFFFF equals \$surface in this theme, but that token changes with the theme/);
   assert.match(t, /Safe fixes available for \d+: pass fix/);

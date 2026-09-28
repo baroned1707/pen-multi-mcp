@@ -1,0 +1,125 @@
+{
+ "server": "working tree",
+ "measuredAt": "2026-09-28T09:31:22.774Z",
+ "proxy": "tokens = UTF-8 bytes / 4",
+ "files": [
+  {
+   "file": "near-me.pen",
+   "overviewTokens": 1925,
+   "screens": [
+    {
+     "id": "pLQEs",
+     "tokens": 2423,
+     "lines": 50,
+     "redundancy": 0.407
+    },
+    {
+     "id": "yDSTS",
+     "tokens": 1175,
+     "lines": 26,
+     "redundancy": 0.372
+    },
+    {
+     "id": "i0VgDA",
+     "tokens": 1796,
+     "lines": 40,
+     "redundancy": 0.379
+    },
+    {
+     "id": "B5z0mX",
+     "tokens": 2974,
+     "lines": 66,
+     "redundancy": 0.436
+    },
+    {
+     "id": "Mfmdq",
+     "tokens": 764,
+     "lines": 12,
+     "redundancy": 0.109
+    },
+    {
+     "id": "O3krbn",
+     "tokens": 2404,
+     "lines": 59,
+     "redundancy": 0.394
+    },
+    {
+     "id": "fizyF",
+     "tokens": 15043,
+     "lines": 394,
+     "redundancy": 0.593
+    },
+    {
+     "id": "d2oZMO",
+     "tokens": 2045,
+     "lines": 51,
+     "redundancy": 0.342
+    }
+   ],
+   "avg": {
+    "tokens": 3578,
+    "lines": 87.25,
+    "redundancy": 0.379
+   }
+  },
+  {
+   "file": "driversafe.pen",
+   "overviewTokens": 573,
+   "screens": [
+    {
+     "id": "TvTTh",
+     "tokens": 1804,
+     "lines": 48,
+     "redundancy": 0.266
+    },
+    {
+     "id": "D9kW0",
+     "tokens": 1445,
+     "lines": 46,
+     "redundancy": 0.377
+    },
+    {
+     "id": "a09qbH",
+     "tokens": 3698,
+     "lines": 115,
+     "redundancy": 0.533
+    },
+    {
+     "id": "f05Ec",
+     "tokens": 2423,
+     "lines": 77,
+     "redundancy": 0.371
+    },
+    {
+     "id": "G5zE63",
+     "tokens": 2818,
+     "lines": 86,
+     "redundancy": 0.394
+    },
+    {
+     "id": "HvbWh",
+     "tokens": 2660,
+     "lines": 85,
+     "redundancy": 0.391
+    },
+    {
+     "id": "IIIY3",
+     "tokens": 2902,
+     "lines": 90,
+     "redundancy": 0.542
+    },
+    {
+     "id": "dJfCL",
+     "tokens": 2717,
+     "lines": 81,
+     "redundancy": 0.379
+    }
+   ],
+   "avg": {
+    "tokens": 2558.375,
+    "lines": 78.5,
+    "redundancy": 0.407
+   }
+  }
+ ]
+}

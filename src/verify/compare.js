@@ -60,7 +60,7 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
     const contents =
       (lost.length ? ` Its ${lost.length} compared descendants are missing too${texts.length ? `, including the texts ${texts.slice(0, 6).join(", ")}${texts.length > 6 ? ", …" : ""}` : ""}.` : "") +
       (present.length ? ` ${present.length} of its contents are present (${present.slice(0, 3).map((n) => n.name).join(", ")}${present.length > 3 ? ", …" : ""}): the container itself is what differs.` : "");
-    add({ severity: sev, group: "Structure", kind: "missing", designId: node.id, address: node.address, box: node.box, contains: lost.map((n) => n.id), message: `missing: ${what} — ${label(node)} at ${box(node.box)} has no counterpart in the UI${node.kind === "text" ? " (no element shows this text)" : ""}.${contents}` });
+    add({ severity: sev, group: "Structure", kind: "missing", designId: node.id, address: node.address, box: node.box, contains: lost.map((n) => n.id), present: present.length ? present.map((n) => n.id) : undefined, message: `missing: ${what} — ${label(node)} at ${box(node.box)} has no counterpart in the UI${node.kind === "text" ? " (no element shows this text)" : ""}.${contents}` });
   }
   const designTexts = new Set(design.nodes.filter((n) => n.kind === "text").map((n) => normText(n.text)));
   const extras = matched.unmatchedUi.filter((el) => normText(el.text) && !designTexts.has(normText(el.text))).sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x);
@@ -93,12 +93,12 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
 
     if (node.kind === "text" && pair.how !== "text" && has("text")) {
       if (normText(el.text) !== normText(node.text)) {
-        add({ ...base, severity: "high", group: "Structure", kind: "content", message: `text: "${String(el.text ?? "").trim().slice(0, 60)}" in the UI, "${String(node.text).slice(0, 60)}" in the design — ${who}.` });
+        add({ ...base, severity: "high", group: "Structure", kind: "content", ui: String(el.text ?? "").trim(), message: `text: "${String(el.text ?? "").trim().slice(0, 60)}" in the UI, "${String(node.text).slice(0, 60)}" in the design — ${who}.` });
       }
     }
     const flat = (t) => String(t ?? "").normalize("NFKC").replace(/\s+/g, " ").trim();
     if (node.kind === "text" && has("text") && el.text && normText(el.text) === normText(node.text) && flat(el.text) !== flat(node.text)) {
-      add({ ...base, severity: "low", group: "Typography", kind: "case", message: `letter case: "${flat(el.text).slice(0, 40)}" in the UI, "${flat(node.text).slice(0, 40)}" in the design — ${who}.` });
+      add({ ...base, severity: "low", group: "Typography", kind: "case", ui: flat(el.text), message: `letter case: "${flat(el.text).slice(0, 40)}" in the UI, "${flat(node.text).slice(0, 40)}" in the design — ${who}.` });
     }
 
     if (node.kind === "text" && el.truncated) {
@@ -165,39 +165,39 @@ export function compare(design, ui, matched, { tolerance = {}, fields, viewportW
     if (node.fill && has("bg")) {
       const bg = effectiveBg(el, byIndex, page);
       const de = deltaE(node.fill, bg);
-      if (de > tol.color) add({ ...base, severity: "medium", group: "Color", kind: "fill", message: `fill: ${toHex(bg)} in the UI, ${toHex(node.fill)} in the design (ΔE ${r1(de)}) — ${who}.` });
+      if (de > tol.color) add({ ...base, severity: "medium", group: "Color", kind: "fill", ui: toHex(bg), message: `fill: ${toHex(bg)} in the UI, ${toHex(node.fill)} in the design (ΔE ${r1(de)}) — ${who}.` });
     }
     if (node.color && has("fg")) {
       const fg = parseColor(el.fg);
       if (fg) {
         const de = deltaE(node.color, fg);
-        if (de > tol.color) add({ ...base, severity: "medium", group: "Color", kind: node.type === "icon" ? "icon-color" : "text-color", message: `${node.type === "icon" ? "icon" : "text"} color: ${toHex(fg)} in the UI, ${toHex(node.color)} in the design (ΔE ${r1(de)}) — ${who}.` });
+        if (de > tol.color) add({ ...base, severity: "medium", group: "Color", kind: node.type === "icon" ? "icon-color" : "text-color", ui: toHex(fg), message: `${node.type === "icon" ? "icon" : "text"} color: ${toHex(fg)} in the UI, ${toHex(node.color)} in the design (ΔE ${r1(de)}) — ${who}.` });
       }
     }
     if (node.stroke && has("border")) {
       const bw = el.borderWidth ?? 0;
-      if (bw <= 0) add({ ...base, severity: "low", group: "Color", kind: "border", message: `border: none in the UI, ${node.strokeWidth}px ${toHex(node.stroke)} in the design — ${who}.` });
+      if (bw <= 0) add({ ...base, severity: "low", group: "Color", kind: "border", ui: null, message: `border: none in the UI, ${node.strokeWidth}px ${toHex(node.stroke)} in the design — ${who}.` });
       else {
         const bc = parseColor(el.borderColor);
-        if (bc && deltaE(node.stroke, bc) > tol.color) add({ ...base, severity: "low", group: "Color", kind: "border", message: `border color: ${toHex(bc)} in the UI, ${toHex(node.stroke)} in the design — ${who}.` });
+        if (bc && deltaE(node.stroke, bc) > tol.color) add({ ...base, severity: "low", group: "Color", kind: "border", ui: toHex(bc), message: `border color: ${toHex(bc)} in the UI, ${toHex(node.stroke)} in the design — ${who}.` });
       }
     }
 
     // Typography and shape.
     if (node.kind === "text") {
       if (node.fontSize && has("fontSize") && el.fontSize && Math.abs(el.fontSize - node.fontSize) > tol.fontSize) {
-        add({ ...base, severity: "medium", group: "Typography", kind: "font-size", message: `font size: ${r1(el.fontSize)} in the UI, ${r1(node.fontSize)} in the design — ${who}.` });
+        add({ ...base, severity: "medium", group: "Typography", kind: "font-size", ui: r1(el.fontSize), message: `font size: ${r1(el.fontSize)} in the UI, ${r1(node.fontSize)} in the design — ${who}.` });
       }
       if (node.fontWeight && has("fontWeight") && el.fontWeight && Math.abs(el.fontWeight - node.fontWeight) >= tol.fontWeight) {
-        add({ ...base, severity: "medium", group: "Typography", kind: "font-weight", message: `font weight: ${el.fontWeight} in the UI, ${node.fontWeight} in the design — ${who}.` });
+        add({ ...base, severity: "medium", group: "Typography", kind: "font-weight", ui: el.fontWeight, message: `font weight: ${el.fontWeight} in the UI, ${node.fontWeight} in the design — ${who}.` });
       }
       if (node.lineHeight && has("lineHeight") && el.lineHeight && Math.abs(el.lineHeight - node.lineHeight) > tol.lineHeight) {
-        add({ ...base, severity: "low", group: "Typography", kind: "line-height", message: `line height: ${r1(el.lineHeight)} in the UI, ${r1(node.lineHeight)} in the design — ${who}.` });
+        add({ ...base, severity: "low", group: "Typography", kind: "line-height", ui: r1(el.lineHeight), message: `line height: ${r1(el.lineHeight)} in the UI, ${r1(node.lineHeight)} in the design — ${who}.` });
       }
     }
     if (node.radius !== undefined && has("radius") && el.radius !== undefined) {
       const want = Math.min(node.radius, d.w / 2, d.h / 2), got = Math.min(el.radius, u.w / 2, u.h / 2);
-      if (Math.abs(got - want) > tol.radius) add({ ...base, severity: "low", group: "Layout", kind: "radius", message: `corner radius: ${r1(got)} in the UI, ${r1(want)} in the design — ${who}.` });
+      if (Math.abs(got - want) > tol.radius) add({ ...base, severity: "low", group: "Layout", kind: "radius", ui: r1(got), message: `corner radius: ${r1(got)} in the UI, ${r1(want)} in the design — ${who}.` });
     }
   }
 

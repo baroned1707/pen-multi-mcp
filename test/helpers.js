@@ -2,13 +2,14 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-const serverPath = fileURLToPath(new URL("../src/index.js", import.meta.url));
+// PEN_MULTI_SERVER points benchmarks at another checkout (e.g. a release, for a baseline).
+const serverPath = process.env.PEN_MULTI_SERVER ?? fileURLToPath(new URL("../src/index.js", import.meta.url));
 
 /** Starts one pen-multi server, the way one agent session would: its own process and working directory. */
-export async function connect({ home, cwd, env = {} }) {
+export async function connect({ home, cwd, env = {}, server = serverPath }) {
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [serverPath],
+    args: [server],
     cwd,
     // The desktop app bridge is off unless a test opts in, so tests never touch the user's app.
     env: { ...process.env, PEN_MULTI_HOME: home, PEN_MULTI_APP: "0", ...env },

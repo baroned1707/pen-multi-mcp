@@ -1,0 +1,184 @@
+{
+ "server": "v1.2.0 (git worktree of the tag)",
+ "measuredAt": "2026-09-28T07:58:52.898Z",
+ "proxy": "tokens = UTF-8 bytes / 4",
+ "files": [
+  {
+   "file": "near-me.pen",
+   "overviewTokens": 1816,
+   "screens": [
+    {
+     "id": "pLQEs",
+     "tokens": 2607,
+     "lines": 48,
+     "redundancy": 0.438
+    },
+    {
+     "id": "yDSTS",
+     "tokens": 1195,
+     "lines": 24,
+     "redundancy": 0.396
+    },
+    {
+     "id": "i0VgDA",
+     "tokens": 1846,
+     "lines": 38,
+     "redundancy": 0.405
+    },
+    {
+     "id": "B5z0mX",
+     "tokens": 3147,
+     "lines": 64,
+     "redundancy": 0.433
+    },
+    {
+     "id": "Mfmdq",
+     "tokens": 623,
+     "lines": 10,
+     "redundancy": 0.07
+    },
+    {
+     "id": "O3krbn",
+     "tokens": 2526,
+     "lines": 57,
+     "redundancy": 0.39
+    },
+    {
+     "id": "fizyF",
+     "tokens": 17154,
+     "lines": 401,
+     "redundancy": 0.594
+    },
+    {
+     "id": "d2oZMO",
+     "tokens": 2163,
+     "lines": 49,
+     "redundancy": 0.337
+    }
+   ],
+   "avg": {
+    "tokens": 3907.625,
+    "lines": 86.375,
+    "redundancy": 0.383
+   }
+  },
+  {
+   "file": "p2p-print-3d.pen",
+   "overviewTokens": 3912,
+   "screens": [
+    {
+     "id": "qha4Y",
+     "tokens": 9057,
+     "lines": 277,
+     "redundancy": 0.49
+    },
+    {
+     "id": "Hcb0z",
+     "tokens": 1481,
+     "lines": 41,
+     "redundancy": 0.289
+    },
+    {
+     "id": "z8RKwD",
+     "tokens": 2968,
+     "lines": 75,
+     "redundancy": 0.41
+    },
+    {
+     "id": "lfieo",
+     "tokens": 634,
+     "lines": 12,
+     "redundancy": 0.167
+    },
+    {
+     "id": "ebWio",
+     "tokens": 2141,
+     "lines": 55,
+     "redundancy": 0.37
+    },
+    {
+     "id": "XJ2dL",
+     "tokens": 527,
+     "lines": 13,
+     "redundancy": 0.151
+    },
+    {
+     "id": "E3LkP",
+     "tokens": 1373,
+     "lines": 38,
+     "redundancy": 0.302
+    },
+    {
+     "id": "yPig3",
+     "tokens": 948,
+     "lines": 24,
+     "redundancy": 0.152
+    }
+   ],
+   "avg": {
+    "tokens": 2391.125,
+    "lines": 66.875,
+    "redundancy": 0.291
+   }
+  },
+  {
+   "file": "driversafe.pen",
+   "overviewTokens": 573,
+   "screens": [
+    {
+     "id": "TvTTh",
+     "tokens": 1850,
+     "lines": 46,
+     "redundancy": 0.287
+    },
+    {
+     "id": "D9kW0",
+     "tokens": 1694,
+     "lines": 44,
+     "redundancy": 0.434
+    },
+    {
+     "id": "a09qbH",
+     "tokens": 4127,
+     "lines": 113,
+     "redundancy": 0.549
+    },
+    {
+     "id": "f05Ec",
+     "tokens": 2571,
+     "lines": 75,
+     "redundancy": 0.373
+    },
+    {
+     "id": "G5zE63",
+     "tokens": 3118,
+     "lines": 84,
+     "redundancy": 0.395
+    },
+    {
+     "id": "HvbWh",
+     "tokens": 2998,
+     "lines": 83,
+     "redundancy": 0.409
+    },
+    {
+     "id": "IIIY3",
+     "tokens": 3263,
+     "lines": 88,
+     "redundancy": 0.559
+    },
+    {
+     "id": "dJfCL",
+     "tokens": 2999,
+     "lines": 79,
+     "redundancy": 0.38
+    }
+   ],
+   "avg": {
+    "tokens": 2827.5,
+    "lines": 76.5,
+    "redundancy": 0.423
+   }
+  }
+ ]
+}
