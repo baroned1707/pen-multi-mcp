@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2 — 2026-09-28
+
+- A server whose host dies without closing stdin (crash, kill -9) notices it is re-parented and shuts down within ~2 s, releasing its file locks; shutdown never takes longer than 10 s (`PEN_MULTI_SHUTDOWN_TIMEOUT_MS`). Found an orphaned server that had held on for 11 hours.
+
 ## 1.0.1 — 2026-09-28
 
 Checked on a real iOS 27 simulator (iPhone 18 Pro):

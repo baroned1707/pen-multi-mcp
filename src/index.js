@@ -62,7 +62,7 @@ Many agents and projects:
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "1.0.1" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "1.0.2" }, { instructions: INSTRUCTIONS });
 
 const filePath = z
   .string()
@@ -576,6 +576,8 @@ let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  // Never hang on the way out: a stuck save or editor must not keep locks and memory forever.
+  setTimeout(() => process.exit(0), Number(process.env.PEN_MULTI_SHUTDOWN_TIMEOUT_MS ?? 10_000)).unref();
   await saver.flushAll();
   await Promise.allSettled([pool.closeAll(), app.close()]);
   fs.rmSync(utilityFile, { force: true });
@@ -584,6 +586,13 @@ async function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 process.stdin.on("close", shutdown);
+process.stdin.on("end", shutdown);
+// If the host dies without closing stdin (crash, kill -9), this process is re-parented: leave too,
+// so its file locks and editors do not outlive the agent.
+const hostPid = process.ppid;
+setInterval(() => {
+  if (process.ppid !== hostPid) shutdown();
+}, 2000).unref();
 
 await server.connect(new StdioServerTransport());
 

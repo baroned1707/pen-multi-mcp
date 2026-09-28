@@ -140,3 +140,40 @@ test("the real engine's silent and failing reads get concrete hints", async () =
   const read = await call(client, "execute", { filePath: fileA, input: 'Print("hello")' });
   assert.doesNotMatch(text(read), /HINT|Saving to disk/);
 });
+
+test("a server whose host dies without closing stdin exits and releases its locks", async () => {
+  const { spawn } = await import("node:child_process");
+  const os = await import("node:os");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "pen-multi-orphan-"));
+  // A host process that starts pen-multi with stdin held open by a grandchild, then is killed.
+  const serverPath = new URL("../src/index.js", import.meta.url).pathname;
+  const host = spawn(process.execPath, ["-e", `
+    const { spawn } = require("child_process");
+    const s = spawn(process.execPath, [${JSON.stringify(serverPath)}], { stdio: ["pipe", "ignore", "ignore"], env: { ...process.env, PEN_MULTI_HOME: ${JSON.stringify(home)}, PEN_MULTI_APP: "0", PEN_MULTI_PREWARM: "0" } });
+    // A keeper holds the write end of the server's stdin, so stdin never closes when the host dies.
+    const keeper = spawn("sleep", ["30"], { stdio: ["ignore", s.stdin, "ignore"], detached: true });
+    keeper.unref();
+    console.log(s.pid + " " + keeper.pid);
+    setInterval(() => {}, 1000);
+  `], { stdio: ["ignore", "pipe", "ignore"] });
+  const [serverPid, keeperPid] = (await new Promise((r) => host.stdout.once("data", (d) => r(String(d).trim())))).split(" ").map(Number);
+  await new Promise((r) => setTimeout(r, 1500));
+  host.kill("SIGKILL");
+  const alive = () => {
+    try {
+      process.kill(serverPid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const end = Date.now() + 15_000;
+  while (alive() && Date.now() < end) await new Promise((r) => setTimeout(r, 250));
+  const survived = alive();
+  try {
+    process.kill(keeperPid, "SIGKILL");
+  } catch {}
+  if (survived) process.kill(serverPid, "SIGKILL");
+  assert.equal(survived, false, "the orphaned server exited");
+  fs.rmSync(home, { recursive: true, force: true });
+});
