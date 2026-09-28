@@ -322,3 +322,33 @@ test("cross-origin iframes are read through the browser and placed at their fram
     inner.close();
   }
 });
+
+test("iframes: hidden ones are not read; a scrolled frame shows only what is visible through it", async () => {
+  const http = await import("node:http");
+  const pages = {
+    "/text": `<body style="margin:0"><h2 style="margin:0">Framed text</h2></body>`,
+    "/list": `<body style="margin:0">${Array.from({ length: 40 }, (_, k) => `<p style="margin:0;height:50px">Row ${k}</p>`).join("")}<script>scrollTo(0, 1000)</script></body>`,
+  };
+  const other = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end(pages[req.url] ?? "");
+  });
+  await new Promise((r) => other.listen(0, "127.0.0.1", r));
+  const o = `http://127.0.0.1:${other.address().port}`;
+  try {
+    fs.writeFileSync(
+      path.join(dir, "frames.html"),
+      `<body style="margin:0"><iframe src="${o}/text" style="visibility:hidden;width:200px;height:40px;border:0"></iframe>
+       <div style="opacity:0"><iframe src="${o}/text" style="width:200px;height:40px;border:0"></iframe></div>
+       <div style="width:0;height:0;overflow:hidden"><iframe src="${o}/text" style="width:200px;height:40px;border:0"></iframe></div>
+       <iframe src="${o}/list" style="position:absolute;left:0;top:300px;width:200px;height:100px;border:0"></iframe></body>`,
+    );
+    const cap = await call(client, "capture", { source: { kind: "web", url: url("frames.html") }, savePath: "frames-capture" });
+    assert.ok(!cap.isError, text(cap));
+    const snap = JSON.parse(fs.readFileSync(path.join(dir, "frames-capture.json"), "utf8"));
+    const texts = snap.elements.filter((e) => e.text).map((e) => `${e.text}@${e.box.y}`);
+    assert.deepEqual(texts, ["Row 20@300", "Row 21@350"]);
+  } finally {
+    other.close();
+  }
+});

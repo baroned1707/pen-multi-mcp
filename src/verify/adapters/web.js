@@ -202,7 +202,7 @@ function collect(limit) {
     const x = cs.textAlign === "center" ? content.x + (content.w - w) / 2 : cs.textAlign === "right" || cs.textAlign === "end" ? content.x + content.w - w : content.x;
     return { x, y, w, h: lh };
   };
-  const visit = (el, ox = 0, oy = 0) => {
+  const visit = (el, ox = 0, oy = 0, frameClip = null) => {
     if (out.length >= limit) return;
     const cs = gcs(el);
     if (cs.display === "none") return;
@@ -212,7 +212,9 @@ function collect(limit) {
     if (!invisible && (el.checkVisibility ? !el.checkVisibility({ opacityProperty: true }) : Number(cs.opacity) === 0) && cs.display !== "contents") return;
     const r = el.getBoundingClientRect();
     if (srOnly(r, cs)) return;
-    const shown = !invisible && r.width > 0 && r.height > 0 && !tiny(r, cs) && !offPage(r, ox, oy) && !clipped(el, r, cs);
+    // Inside an iframe: only what shows through its content box (not scrolled away or overflowing).
+    const inFrame = !frameClip || (r.left + sx + ox < frameClip.x + frameClip.w && r.right + sx + ox > frameClip.x && r.top + sy + oy < frameClip.y + frameClip.h && r.bottom + sy + oy > frameClip.y);
+    const shown = !invisible && inFrame && r.width > 0 && r.height > 0 && !tiny(r, cs) && !offPage(r, ox, oy) && !clipped(el, r, cs);
     if (shown) {
       let text = "";
       let merged = false;
@@ -282,8 +284,8 @@ function collect(limit) {
       index.set(el, o.i);
       out.push(o);
     }
-    for (const c of el.children) visit(c, ox, oy);
-    if (el.shadowRoot) for (const c of el.shadowRoot.children) visit(c, ox, oy);
+    for (const c of el.children) visit(c, ox, oy, frameClip);
+    if (el.shadowRoot) for (const c of el.shadowRoot.children) visit(c, ox, oy, frameClip);
     // Same-origin iframes: their content, placed at the iframe's content box.
     if (el.tagName === "IFRAME" && shown) {
       let doc = null;
@@ -293,7 +295,10 @@ function collect(limit) {
       if (doc?.body) {
         const bl = parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft) || 0, bt = parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop) || 0;
         // Rects inside the iframe are relative to its viewport; the page position adds the iframe's.
-        visit(doc.body, ox + r.left + bl, oy + r.top + bt);
+        const pr = parseFloat(cs.paddingRight) || 0, pb = parseFloat(cs.paddingBottom) || 0;
+        const brw = parseFloat(cs.borderRightWidth) || 0, bbw = parseFloat(cs.borderBottomWidth) || 0;
+        const clip = { x: r.left + sx + ox + bl, y: r.top + sy + oy + bt, w: r.width - bl - pr - brw, h: r.height - bt - pb - bbw };
+        visit(doc.body, ox + r.left + bl, oy + r.top + bt, clip);
       }
     }
   };
@@ -317,58 +322,84 @@ async function revealAll(page) {
 }
 
 /**
- * Cross-origin iframes cannot be read from the page, but the browser can read them directly: each
- * child frame is collected on its own and placed at its iframe element's content box.
+ * Cross-origin iframes cannot be read from the page, but the browser can read them directly. For
+ * each child frame whose iframe element was captured as shown: its elements are collected in the
+ * frame, moved to page coordinates (the frame's viewport origin, minus the frame's own scroll),
+ * and kept only where they fall inside the iframe's content box. Same-origin frames were read in
+ * place by collect(); they are only descended into, for cross-origin frames nested in them.
+ * `origin` is the page position of `frame`'s viewport top-left.
  */
-async function addCrossOriginFrames(frame, data, limit, depth = 0) {
+async function addCrossOriginFrames(frame, data, limit, origin, depth = 0) {
   if (depth > 3) return;
   for (const child of frame.childFrames()) {
-    if (data.elements.length >= limit) return;
-    let handle, info;
+    if (data.elements.length >= limit) {
+      data.truncated = true;
+      return;
+    }
+    let info;
     try {
-      handle = await child.frameElement();
+      const handle = await child.frameElement();
       info = await handle.evaluate((el) => {
         const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
         let sameOrigin = false;
         try {
           sameOrigin = Boolean(el.contentDocument);
         } catch {}
+        const bl = parseFloat(cs.borderLeftWidth) || 0, bt = parseFloat(cs.borderTopWidth) || 0;
+        const pl = parseFloat(cs.paddingLeft) || 0, pt = parseFloat(cs.paddingTop) || 0;
+        const pr = parseFloat(cs.paddingRight) || 0, pb = parseFloat(cs.paddingBottom) || 0;
+        const br = parseFloat(cs.borderRightWidth) || 0, bb = parseFloat(cs.borderBottomWidth) || 0;
         return {
           sameOrigin,
-          x: r.left + window.scrollX + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.paddingLeft) || 0),
-          y: r.top + window.scrollY + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.paddingTop) || 0),
-          box: { x: r.left + window.scrollX, y: r.top + window.scrollY, w: r.width, h: r.height },
+          box: { x: r.left, y: r.top, w: r.width, h: r.height },
+          content: { x: r.left + bl + pl, y: r.top + bt + pt, w: r.width - bl - pl - br - pr, h: r.height - bt - pt - bb - pb },
         };
       });
     } catch {
       continue; // detached or not rendered
     }
-    if (info.sameOrigin) continue; // already read in place by collect()
-    // Offsets of a nested frame: the outer frames' positions were added by the caller.
-    info.x += data.offsetX ?? 0;
-    info.y += data.offsetY ?? 0;
-    const owner = data.elements.find((e) => e.tag === "iframe" && Math.abs(e.box.x - (info.box.x + (data.offsetX ?? 0))) < 1 && Math.abs(e.box.y - (info.box.y + (data.offsetY ?? 0))) < 1);
-    let inner;
+    const at = (b) => ({ ...b, x: b.x + origin.x, y: b.y + origin.y });
+    const box = at(info.box), content = at(info.content);
+    // Only frames whose iframe was captured as shown (hidden, clipped or transparent ones are not).
+    const owner = data.elements.find((e) => e.tag === "iframe" && Math.abs(e.box.x - box.x) < 1 && Math.abs(e.box.y - box.y) < 1 && Math.abs(e.box.w - box.w) < 1);
+    if (!owner) continue;
+    let scroll = { x: 0, y: 0 };
     try {
-      inner = await child.evaluate(collect, limit - data.elements.length);
+      scroll = await child.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
     } catch {
       continue;
     }
-    const base = data.elements.length;
-    const shift = (b) => (b ? { ...b, x: b.x + info.x, y: b.y + info.y } : b);
-    for (const el of inner.elements) {
-      data.elements.push({
-        ...el,
-        i: base + el.i,
-        parent: el.parent === undefined ? owner?.i : base + el.parent,
-        box: shift(el.box),
-        textBox: shift(el.textBox),
-        contentBox: shift(el.contentBox),
-        selector: `iframe > ${el.selector}`,
-      });
+    const childOrigin = { x: content.x, y: content.y };
+    if (!info.sameOrigin) {
+      let inner;
+      try {
+        inner = await child.evaluate(collect, limit - data.elements.length);
+      } catch {
+        continue;
+      }
+      const base = data.elements.length;
+      // collect() adds the frame's own scroll; the page position is its viewport origin plus the rect.
+      const shift = (b) => (b ? { ...b, x: b.x - scroll.x + childOrigin.x, y: b.y - scroll.y + childOrigin.y } : b);
+      const inside = (b) => b.x < content.x + content.w && b.x + b.w > content.x && b.y < content.y + content.h && b.y + b.h > content.y;
+      const kept = new Map(); // inner index -> outer index
+      for (const el of inner.elements) {
+        const b = shift(el.box);
+        if (!inside(b)) continue; // scrolled away or overflowing the iframe
+        const i = base + kept.size;
+        kept.set(el.i, i);
+        data.elements.push({
+          ...el,
+          i,
+          parent: el.parent === undefined || !kept.has(el.parent) ? owner.i : kept.get(el.parent),
+          box: b,
+          textBox: shift(el.textBox),
+          contentBox: shift(el.contentBox),
+          selector: `iframe > ${el.selector}`,
+        });
+      }
+      if (inner.truncated) data.truncated = true;
     }
-    if (inner.truncated) data.truncated = true;
-    await addCrossOriginFrames(child, { ...data, offsetX: info.x, offsetY: info.y, elements: data.elements }, limit, depth + 1);
+    await addCrossOriginFrames(child, data, limit, childOrigin, depth + 1);
   }
 }
 
@@ -403,7 +434,9 @@ export async function captureWeb({ url, steps = [], fullPage = true, width, heig
     await page.evaluate(() => document.fonts?.ready);
     await page.waitForTimeout(150);
     const data = await page.evaluate(collect, limit);
-    await addCrossOriginFrames(page.mainFrame(), data, limit);
+    // The main frame's viewport sits at the page's scroll position (collect() used page coordinates).
+    const mainScroll = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
+    await addCrossOriginFrames(page.mainFrame(), data, limit, mainScroll);
     await page.screenshot({ path: screenshotPath, fullPage });
     return {
       snapshot: {
