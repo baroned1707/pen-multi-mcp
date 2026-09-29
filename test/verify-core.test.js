@@ -468,3 +468,19 @@ test("code-to-design: number tokens only when one token has the value; a design 
   assert.match(lines.join("\n"), /⚠ The design was also edited since this frame's last verify/);
   assert.match(lines.join("\n"), /1\. Update\("a", \{"fill":"\$ink"\}\) {2}\/\/ x/);
 });
+
+test("a marker on an element without its own text does not pair with a text node of that name", async () => {
+  const { match } = await import("../src/verify/match.js");
+  const design = {
+    nodes: [{ id: "t", kind: "text", name: "Home", address: "S/Tabs/Home/Home", text: "Home", box: { x: 10, y: 800, w: 40, h: 12 } }],
+    nodeIds: new Set(["S", "tab", "t"]),
+    allNames: new Set(["Home"]),
+    addresses: new Map([["t", "S/Tabs/Home/Home"], ["tab", "S/Tabs/Home"]]),
+    frame: { id: "S", w: 390, h: 844 },
+    order: [],
+  };
+  const ui = { elements: [{ i: 0, marker: "Home", box: { x: 0, y: 780, w: 97, h: 56 } }, { i: 1, parent: 0, text: "Home", box: { x: 10, y: 800, w: 40, h: 12 } }] };
+  const m = match(design, ui);
+  assert.equal(m.pairs.get("t").el.i, 1, "the label, not the link around it");
+  assert.equal(m.markerMisses.length, 0);
+});

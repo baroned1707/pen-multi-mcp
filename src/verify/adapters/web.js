@@ -279,6 +279,7 @@ function collect(limit) {
         textAlign: text ? ({ start: "left", end: "right", justify: "left", "-webkit-center": "center" }[cs.textAlign] ?? cs.textAlign) : undefined,
         fontWeight: text ? num(cs.fontWeight) : undefined,
         lineHeight: text ? lh : undefined,
+        letterSpacing: text && cs.letterSpacing !== "normal" ? num(cs.letterSpacing) || undefined : undefined,
         radius: num(cs.borderTopLeftRadius),
         borderWidth: bw,
         borderColor: bw > 0 ? rgb(cs.borderTopColor) : undefined,

@@ -71,7 +71,11 @@ export function match(design, ui) {
   for (const el of ui.elements) {
     const v = markerValue(el.marker);
     if (!v) continue;
-    const nodes = resolveMarker(v, design, byId);
+    // An element with no text of its own (a link around an icon and a label) never stands for a
+    // text node: that text is matched by its content, on the element that shows it.
+    const resolved = resolveMarker(v, design, byId);
+    const nodes = el.text ? resolved : resolved.filter((n) => n.kind !== "text");
+    if (resolved.length && !nodes.length) continue;
     if (!nodes.length) {
       // A marker on a wrapper the comparison skips is fine; one that names nothing is a typo or stale.
       const w = stripIndex(v);

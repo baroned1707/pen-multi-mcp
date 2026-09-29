@@ -44,6 +44,7 @@ const textStyle = (el, tokens, numbers) => {
   if (el.fontWeight) out.fontWeight = String(el.fontWeight);
   if (el.fontFamily) out.fontFamily = el.fontFamily;
   if (el.lineHeight && el.fontSize) out.lineHeight = r2(el.lineHeight / el.fontSize);
+  if (el.letterSpacing) out.letterSpacing = r2(el.letterSpacing);
   return out;
 };
 

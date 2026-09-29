@@ -186,3 +186,14 @@ test("import_ui points out repeated structures that are not components", async (
   const res = await call(client, "import_ui", { filePath: file, source: { kind: "web", url: `file://${path.join(dir, "list.html")}` }, name: "List" });
   assert.match(text(res), /Repeated like a component but not one: 3× "[^"]+"/);
 });
+
+test("import_ui keeps letter spacing, so tracked text keeps its width", async () => {
+  fs.writeFileSync(path.join(dir, "tracked.html"), `<body style="margin:0;font-family:Arial;background:#fff"><p style="margin:16px;font-size:12px;letter-spacing:2px">20:30 – 03:00 · DO NOT WATCH THE SCREEN</p></body>`);
+  const src = { kind: "web", url: `file://${path.join(dir, "tracked.html")}` };
+  const res = await call(client, "import_ui", { filePath: file, source: src, name: "Tracked" });
+  const id = /"Tracked" \((\S+)\)/.exec(text(res))[1];
+  const ls = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "text" ? n.letterSpacing : undefined).filter((x) => x !== undefined)))` })))[1]);
+  assert.deepEqual(ls, [2]);
+  const v = await call(client, "verify", { filePath: file, target: id, source: src, crops: 0 });
+  assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
+});
