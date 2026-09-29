@@ -284,6 +284,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       const { id, frame: picked, theme: frameTheme } = await pickFrame(target, wanted, { width, theme });
       if (src) src = withState(target, wanted, picked, src);
       if (src?.kind === "web" && !src.url) src = { ...src, url: routeUrl(target, wanted, picked) };
+      await design.settleFonts(target, id); // the design measured in its real fonts
       const model = buildModel(await readSubtree(run, id));
       const rootTheme = model.root.theme && typeof model.root.theme === "object" ? Object.values(model.root.theme)[0] : undefined;
       const d = designNodes(model);

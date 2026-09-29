@@ -32,6 +32,7 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
   async function checkAutoLayout(target, rootId, specs, ids) {
     const auto = specs.filter((sp) => sp.auto && ids[sp.key]);
     if (!auto.length) return { line: "Positions are absolute (layout none): no container could be imported as auto layout (flexbox, or children stacked with even gaps).", kept: 0, failed: 0 };
+    await design.settleFonts?.(target, rootId); // auto layout measured in the real fonts
     const model = buildModel(await readSubtree(design.reader(target), rootId));
     const kidsOf = new Map();
     for (const sp of specs) if (sp.parent) (kidsOf.get(sp.parent) ?? kidsOf.set(sp.parent, []).get(sp.parent)).push(sp);
@@ -215,6 +216,7 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
               if (!current || rec.pen?.sha1 !== current) {
                 if (reads < maxReads) {
                   reads++;
+                  await design.settleFonts?.(target, c.id);
                   const model = buildModel(await readSubtree(design.reader(target), c.id));
                   const now = buildRecord({ penFile: target.file, penSha: current, frame: rec.frame, design: designNodes(model), pairs: [] });
                   const dd = factsDiff(rec.nodes, now.nodes, "design");

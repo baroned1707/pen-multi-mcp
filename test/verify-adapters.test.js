@@ -183,3 +183,26 @@ test("probe: the status bar offset is checked against the screenshot (a hidden s
   assert.equal(chooseOffsetY(body, draw(24), 1), 24, "visible status bar: its height");
   assert.equal(chooseOffsetY({ elements: body.elements }, draw(0), 1), undefined, "no status bar reported (iOS)");
 });
+
+test("web capture measures text in the page's web font even when the page renders late", async () => {
+  const { captureWeb } = await import("../src/verify/adapters/web.js");
+  const http = await import("node:http");
+  const font = fs.readFileSync("/System/Library/Fonts/Supplemental/Courier New.ttf");
+  const srv = http.createServer((req, res) => {
+    if (req.url === "/late.ttf") return setTimeout(() => (res.writeHead(200, { "content-type": "font/ttf" }), res.end(font)), 700);
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end(`<style>@font-face{font-family:Late;src:url(/late.ttf)}body{margin:0;font:32px Late, sans-serif}</style><body><script>setTimeout(()=>{const p=document.createElement("span");p.textContent="Hello world";document.body.append(p)},1200)</script></body>`);
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${srv.address().port}/`;
+  const shot = (n) => path.join(os.tmpdir(), `pen-font-${process.pid}-${n}.png`);
+  try {
+    const now = await captureWeb({ url, width: 390, height: 200, screenshotPath: shot(1), steps: [{ waitFor: "span" }] });
+    const settled = await captureWeb({ url, width: 390, height: 200, screenshotPath: shot(2), steps: [{ waitFor: "span" }, { wait: 3000 }] });
+    const w = (s) => s.snapshot.elements.find((e) => e.text === "Hello world")?.box.w;
+    assert.ok(w(settled) > 0);
+    assert.equal(w(now), w(settled), "the same width as with the font surely loaded (Courier is wider than the fallback)");
+  } finally {
+    srv.close();
+  }
+});

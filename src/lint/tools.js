@@ -38,6 +38,7 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
       const renderDir = fs.mkdtempSync(path.join(os.tmpdir(), "pen-multi-lint-"));
       try {
         for (const id of ids) {
+          await design.settleFonts?.(target, id);
           const model = buildModel(await readSubtree(run, id));
           names.set(id, model.root.name ?? id);
           for (const n of model.nodes.values()) if (n.component && !n.component.swapped) components.set(n.component.id, n.component.name);
@@ -60,6 +61,7 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
       // Instances show their components: lint those once (their fixes change every instance).
       for (const [id, name] of [...components].slice(0, 40)) {
         try {
+          await design.settleFonts?.(target, id);
           const model = buildModel(await readSubtree(run, id));
           for (const x of lintScreen(model, { ...doc, mobile: false })) if (x.rule !== "touch-target") findings.push({ ...x, screen: `component ${name}` });
         } catch {

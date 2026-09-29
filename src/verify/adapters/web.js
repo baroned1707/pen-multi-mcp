@@ -491,7 +491,17 @@ export async function captureWeb({ url, steps = [], mocks = [], fullPage = true,
     // content-visibility:auto sections render only near the viewport; render them all.
     await page.addStyleTag({ content: "*{content-visibility:visible !important}" }).catch(() => {});
     if (fullPage) await revealAll(page);
-    await page.evaluate(() => document.fonts?.ready);
+    // Web fonts: fonts.ready only waits for loads already started, and a page that renders late
+    // (a cold dev server) starts them after it resolves — measured in the fallback font, the page
+    // differs from run to run. Load every declared face (bounded), then let layout settle.
+    await page
+      .evaluate(async () => {
+        const faces = [...(document.fonts ?? [])].filter((f) => f.status !== "loaded").slice(0, 60);
+        await Promise.race([Promise.all(faces.map((f) => f.load().catch(() => {}))), new Promise((r) => setTimeout(r, 5000))]);
+        await document.fonts?.ready;
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      })
+      .catch(() => {});
     await page.waitForTimeout(150);
     const data = await page.evaluate(collect, limit);
     // The main frame's viewport sits at the page's scroll position (collect() used page coordinates).
