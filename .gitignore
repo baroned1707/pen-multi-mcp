@@ -2,3 +2,4 @@ node_modules/
 *.pen
 images/
 exports/
+bench/eval/apps/.baseline-*
