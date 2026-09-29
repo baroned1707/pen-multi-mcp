@@ -79,7 +79,7 @@ function textPlacement(el, origin) {
  * Elements that paint nothing are dropped and their children re-parented to the nearest kept
  * ancestor, so the imported tree is only as deep as what is visible.
  */
-export function buildSpecs(snapshot, { tokens = [], numbers = null, components = null, images = null, frameHeight, autoLayout = true } = {}) {
+export function buildSpecs(snapshot, { tokens = [], numbers = null, components = null, images = null, icons = null, frameHeight, autoLayout = true } = {}) {
   const byIndex = new Map(snapshot.elements.map((el) => [el.i, el]));
   const kept = new Map(); // element index -> spec key (frames only: a text node cannot hold children)
   const specs = [];
@@ -187,6 +187,17 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
       props.stroke = border;
       props.strokeWidth = r2(el.borderWidth);
     }
+    // An icon recognised among the document's icons becomes an icon node (its crop stays the fallback).
+    const iconHit = visual && icons?.get(el.i);
+    if (iconHit) {
+      const [library, icon] = iconHit.split(":");
+      const iprops = { type: "icon", name, library, icon, x, y, width: w, height: h };
+      const fg = tokenOrHex(el.fg, tokens);
+      if (fg) iprops.fill = fg;
+      specs.push({ key, parent, props: iprops, fallback: props, el: el.i });
+      kept.set(el.i, key);
+      continue;
+    }
     specs.push({ key, parent, props, el: el.i });
     kept.set(el.i, key);
     if (text) {
@@ -277,9 +288,9 @@ export function snippets({ screen, specs, batch = 200, key = `__penImport_${Date
   const G = `globalThis[${JSON.stringify(key)}]`;
   out.push(`${G} = { root: Insert(document, ${JSON.stringify(screen)}) };\nPrint("ROOT", ${G}.root);`);
   for (let i = 0; i < specs.length; i += batch) {
-    const part = specs.slice(i, i + batch).map((s) => [s.key, s.parent, s.props]);
+    const part = specs.slice(i, i + batch).map((s) => [s.key, s.parent, s.props, s.fallback ?? null]);
     out.push(
-      `const M = ${G};\nif (!M) throw new Error("the import's state was lost (the editor restarted between batches); delete the partial frame and import again");\nfor (const [key, parent, props] of ${JSON.stringify(part)}) M[key] = Insert(parent ? M[parent] : M.root, props);\nPrint("DONE", ${Math.min(i + batch, specs.length)});`,
+      `const M = ${G};\nif (!M) throw new Error("the import's state was lost (the editor restarted between batches); delete the partial frame and import again");\nlet FB = 0;\nfor (const [key, parent, props, fallback] of ${JSON.stringify(part)}) {\n  try { M[key] = Insert(parent ? M[parent] : M.root, props); }\n  catch (e) { if (!fallback) throw e; M[key] = Insert(parent ? M[parent] : M.root, fallback); FB++; }\n}\nPrint("DONE", ${Math.min(i + batch, specs.length)}, FB);`,
     );
   }
   out.push(`Print("KEYS", JSON.stringify(Object.fromEntries(Object.entries(${G}).filter(([k]) => k !== "root"))));\ndelete ${G};\nPrint("CLEAN", 1);`);

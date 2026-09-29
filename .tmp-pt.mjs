@@ -7,10 +7,6 @@ try {
   const p = await b.newPage({ viewport: { width: 390, height: 844 } });
   await p.goto(new URL(ws.routes["Phiên Mỹ đang mở"], ws.baseUrl + "/").href, { waitUntil: "networkidle" });
   await p.waitForTimeout(1500);
-  console.log(await p.evaluate(() => {
-    const el = document.elementFromPoint(300, 114);
-    const cs = getComputedStyle(el);
-    return { ls: cs.letterSpacing, tt: cs.textTransform, ff: cs.fontFamily, fs: cs.fontSize, fw: cs.fontWeight, tag: el.tagName, cls: el.className?.baseVal ?? el.className, html: el.outerHTML.slice(0, 300), bg: cs.backgroundColor, bgi: cs.backgroundImage.slice(0, 80), w: el.getBoundingClientRect().width, h: el.getBoundingClientRect().height, parent: el.parentElement?.outerHTML.slice(0, 200) };
-  }));
+  console.log(JSON.stringify(await p.evaluate(() => [...document.querySelectorAll("svg, i, [class*=icon], [data-lucide]")].slice(0, 12).map((e) => ({ tag: e.tagName, cls: String(e.className?.baseVal ?? e.className).slice(0, 60), data: [...e.attributes].filter((a) => /^data-|aria-/.test(a.name)).map((a) => a.name + "=" + a.value).join(" ").slice(0, 80), use: e.querySelector("use")?.getAttribute("href"), paths: e.querySelectorAll?.("path").length, w: Math.round(e.getBoundingClientRect().width) }))), null, 0));
   await b.close();
 } finally { stop(); removeWorkspace(ws); }

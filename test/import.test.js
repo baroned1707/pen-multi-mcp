@@ -197,3 +197,25 @@ test("import_ui keeps letter spacing, so tracked text keeps its width", async ()
   const v = await call(client, "verify", { filePath: file, target: id, source: src, crops: 0 });
   assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
 });
+
+test("import_ui turns icons into icon nodes when they are among the document's icons, and keeps the rest as crops", async () => {
+  await call(client, "execute", {
+    filePath: file,
+    input: `const lib = Insert(document, { type: "frame", name: "Icon set", x: 0, y: -1400, width: 300, height: 40, layout: "horizontal", gap: 8 });
+for (const icon of ["chevron-right", "chevron-left", "plus", "check", "info", "x", "search", "bell"]) Insert(lib, { type: "icon", library: "lucide", icon, width: 24, height: 24, fill: "#111111" });`,
+  });
+  const svg = (paths) => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+  fs.writeFileSync(
+    path.join(dir, "icons.html"),
+    `<body style="margin:0;background:#fff;font-family:Arial"><div style="display:flex;gap:16px;padding:16px">
+${svg('<path d="m9 18 6-6-6-6"/>')}${svg('<path d="M5 12h14"/><path d="M12 5v14"/>')}${svg('<path d="M20 6 9 17l-5-5"/>')}${svg('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>')}
+${svg('<path d="M3 3h18v18H3z"/><path d="M3 21 21 3"/><circle cx="8" cy="8" r="2"/>')}
+</div></body>`,
+  );
+  const src = { kind: "web", url: `file://${path.join(dir, "icons.html")}` };
+  const res = text(await call(client, "import_ui", { filePath: file, source: src, name: "Icons" }));
+  assert.match(res, /Icons: 4 of 5 icon elements are icon nodes/);
+  const id = /"Icons" \((\S+)\)/.exec(res)[1];
+  const got = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "icon" ? n.icon : undefined).filter(Boolean)))` })))[1]);
+  assert.deepEqual(got, ["chevron-right", "plus", "check", "info"]);
+});

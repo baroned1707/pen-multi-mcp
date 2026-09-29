@@ -15,6 +15,8 @@ import { SYNC_DIR, buildRecord, codeFilesChanged, diffText, factsDiff, frameDiff
 import { frameFill } from "../verify/tools.js";
 import { slug } from "../verify/tools.js";
 import { buildSpecs, imageCropper, safeName, snippets, tokenOrHex } from "./build.js";
+import { bestIcon, maskOf, renderCandidates } from "./icons.js";
+import { crop } from "../verify/image.js";
 
 const OUT_DIR = "design-verify";
 const sha1 = (file) => (fs.existsSync(file) ? createHash("sha1").update(fs.readFileSync(file)).digest("hex") : null);
@@ -54,6 +56,28 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
       if (out.isError) return { line: `Auto layout: ${auto.length - failed.length} frames kept; putting ${failed.length} back to absolute failed: ${out.content.map((c) => c.text ?? "").join(" ").slice(0, 200)}` };
     }
     return { line: `Auto layout: ${auto.length - failed.length} containers are auto-layout frames (flexbox, or children stacked with even gaps); ${failed.length} went back to absolute placement because the engine's layout did not reproduce the page within 2px; the other frames are absolute.`, kept: auto.length - failed.length, failed: failed.length };
+  }
+
+  /**
+   * Icon elements of the capture recognised among the icons the document already uses, by shape.
+   * Returns { map: Map(element index -> "library:icon"), tried }.
+   */
+  async function recogniseIcons(target, snapshot, shot, scale) {
+    const els = snapshot.elements.filter((e) => e.icon && e.box.w >= 8 && e.box.h >= 8 && e.box.w <= 96 && e.box.h <= 96);
+    if (!els.length) return { map: new Map(), tried: 0 };
+    const used = await design.reader(target)(`const m = {}; Get((n) => { if (n.type === "icon" && n.library && n.icon) m[n.library + ":" + n.icon] = 1; return undefined; }); Print("I", JSON.stringify(Object.keys(m).slice(0, 150)))`);
+    const icons = JSON.parse(/I (.*)/.exec(used.text ?? "")?.[1] ?? "[]").map((k) => k.split(":"));
+    const candidates = await renderCandidates(icons, async (file, input) => {
+      const out = await executeSnippet({ filePath: file, input });
+      return out.content.map((c) => c.text ?? "").join("\n");
+    });
+    const map = new Map();
+    for (const el of els) {
+      const m = maskOf(crop(shot, { x: el.box.x * scale, y: el.box.y * scale, w: el.box.w * scale, h: el.box.h * scale }));
+      const hit = m && bestIcon(m, candidates);
+      if (hit) map.set(el.i, hit.key);
+    }
+    return { map, tried: els.length };
   }
 
   /** What is left to clean up in an import: raw colors and sizes no token has. */
@@ -142,13 +166,15 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
       const usage = await design.reader(target)(USAGE_SNIPPET);
       const numbers = propertyNumbers(ctx.variables, usage.text);
       const components = await markedComponents(target, snapshot);
-      const specs = buildSpecs(snapshot, { tokens, numbers, components, images: cropper, frameHeight: vh });
+      const iconMatches = shot ? await recogniseIcons(target, snapshot, shot, scale) : { map: new Map(), tried: 0 };
+      const specs = buildSpecs(snapshot, { tokens, numbers, components, images: cropper, icons: iconMatches.map, frameHeight: vh });
       const frameName = safeName(name ?? `${snapshot.url ? new URL(snapshot.url).pathname.replace(/^\/+/, "") || "home" : snapshot.platform ?? "screen"} (from code)`);
       const pageBg = tokenOrHex(snapshot.pageBg, tokens) ?? "#FFFFFF";
       const screen = { type: "frame", name: frameName, x: Math.ceil(ctx.right + 200), y: 0, width: Math.round(vw), height: Math.round(vh), layout: "none", clip: true, fill: pageBg, ...(axis ? { theme: { [axis]: theme } } : {}) };
       let rootId = null;
       let created = 0;
       let ids = {};
+      let iconFallbacks = 0;
       for (const input of snippets({ screen, specs })) {
         const out = await executeSnippet({ filePath: target.file, input });
         const t = out.content.map((c) => c.text ?? "").join("\n");
@@ -157,8 +183,8 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
         const keys = /^KEYS (.*)$/m.exec(t);
         if (keys) ids = JSON.parse(keys[1]);
         if (/CLEAN 1/.test(t)) continue;
-        const done = /DONE (\d+)/.exec(t);
-        if (done) created = Number(done[1]);
+        const done = /DONE (\d+) (\d+)/.exec(t);
+        if (done) (created = Number(done[1])), (iconFallbacks += Number(done[2]));
       }
       const layout = await checkAutoLayout(target, rootId, specs, ids);
       return design.wrap(target, [
@@ -167,6 +193,7 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
         cleanliness(specs),
         ...(snapshot.truncated ? ["The page has more elements than a capture keeps (6,000): the import is partial; import a narrower state or screen."] : []),
         layout.line,
+        iconMatches.tried ? `Icons: ${iconMatches.map.size - iconFallbacks} of ${iconMatches.tried} icon elements are icon nodes (recognised among the document's icons)${iconFallbacks ? `; ${iconFallbacks} rejected by the engine, kept as crops` : ""}; the rest are crops.` : "",
         nextStep({ state: "imported", id: rootId }),
         "Name the layers, replace crops with icons or components where they exist, and turn the remaining absolute sections into auto layout where the design should flow. lint the frame to see what is left.",
       ]);
