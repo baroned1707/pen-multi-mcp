@@ -14,6 +14,12 @@ export async function workspace(task, server) {
   const c = await connect({ home: path.join(dir, "home"), cwd: dir, env: { PEN_MULTI_PREWARM: "0" }, server });
   const res = await call(c, "import_ui", { filePath: pen, source: { kind: "web", url: `file://${path.join(dir, "source.html")}` }, name: "Profile" });
   if (res.isError) throw new Error(text(res));
+  // A task may change the design after the import (e.g. both sides edited since they matched).
+  if (TASKS[task].designEdit) {
+    const id = /"Profile" \((\S+)\)/.exec(text(res))[1];
+    const out = await call(c, "execute", { filePath: pen, input: TASKS[task].designEdit(id) });
+    if (out.isError) throw new Error(text(out));
+  }
   await call(c, "save", { filePath: pen });
   await c.close();
   fs.rmSync(path.join(dir, "source.html"));
