@@ -257,7 +257,7 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
         lines.push("", "## Next");
         for (const x of next) {
           const v = (extra = "") => `verify({ target: ${JSON.stringify(x.c.id)}, source: { kind: "web" }${extra} })`;
-          if (x.state === "both-changed") lines.push(`- ask the user which side wins for ${x.c.name} (${x.changes}) — do not overwrite either side`);
+          if (x.state === "both-changed") lines.push(`- ${v()}  // ${x.c.name}: both sides changed — verify tells whether they touched the same nodes (then ask the user which side wins) or different ones (then carry each change across)`);
           else if (x.state === "code-changed") lines.push(`- ${v(', direction: "code-to-design"')}  // ${x.c.name}: code changed — if the design should follow; else fix the code and verify`);
           else lines.push(`- ${v()}  // ${x.c.name}: ${x.state}`);
         }

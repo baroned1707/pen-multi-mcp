@@ -150,7 +150,7 @@ The browser is Playwright's Chromium if installed (`npx playwright install chrom
 
 Every `verify` MATCH records the pair in `design-sync/<frame>.json` next to the `.pen` — the design's facts, the UI's facts (texts only as hashes, so no app data enters the repo), the `.pen` hash, the code commit and the source. Commit it with the code. From then on:
 
-- `verify` on DIFFERS says what changed on each side since the last match, tags every finding *(design changed)*, *(code changed)* or *(both)*, and its `Next:` follows: update the code, update the design (`direction: "code-to-design"`), or — when both changed — ask the user which side wins.
+- `verify` on DIFFERS says what changed on each side since the last match, tags every finding *(design changed)*, *(code changed)* or *(both)*, and its `Next:` follows: update the code, update the design (`direction: "code-to-design"`), carry each side's change to the other when they changed different nodes (`diverged`), or — when the same nodes changed on both sides — ask the user which side wins.
 - `sync_status` gives every screen × width × theme one state — `in-sync`, `design-changed`, `code-changed`, `both-changed`, `match`, `differs`, `never` — with what changed (the design compared exactly; the code through the files that carry the frame's markers, changed since the recorded commit) and the next call per row, conflicts first.
 
 ### Any platform: `file` and `command` sources

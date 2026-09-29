@@ -5,7 +5,7 @@ const call = (tool, args) => `${tool}({ ${Object.entries(args).map(([k, v]) => `
 
 /**
  * state: "inspected" | "never" | "differs" | "match" | "imported" | "design-changed" |
- * "code-changed" | "both-changed" | "in-sync". `id` is the frame; `direction` the verify
+ * "code-changed" | "both-changed" | "diverged" | "in-sync". `id` is the frame; `direction` the verify
  * direction that produced the state; `others` frame ids of the same screen still to check.
  */
 export function nextStep({ state, id, direction = "design-to-code", others = [] }) {
@@ -28,7 +28,9 @@ export function nextStep({ state, id, direction = "design-to-code", others = [] 
     case "code-changed":
       return `Next: if the design should follow the code, ${verify({ direction: "code-to-design" })}; if the code drifted by mistake, fix the code and ${verify({})}.`;
     case "both-changed":
-      return "Next: stop and ask the user which side wins — show both change lists; do not overwrite either side.";
+      return "Next: the same nodes changed on both sides — stop and ask the user which side wins, showing both change lists; do not overwrite either side.";
+    case "diverged":
+      return `Next: both sides changed, in different places — carry each change to the other side: update the code for the design changes listed, then ${verify({ direction: "code-to-design" })} for the code changes and apply its edits; ask the user only if one change undoes the other.`;
     case "in-sync":
       return "Next: nothing to do for this frame.";
     default:

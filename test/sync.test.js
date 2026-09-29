@@ -63,7 +63,9 @@ test("code files changed since the record's commit, working tree included; unkno
 test("syncState", () => {
   assert.equal(syncState({ record: null }), "never");
   assert.equal(syncState({ record: null, lastVerdict: "differs" }), "differs");
-  assert.equal(syncState({ record: {}, designChanged: true, codeChanged: true }), "both-changed");
+  assert.equal(syncState({ record: {}, designChanged: true, codeChanged: true }), "both-changed", "overlap unknown: a conflict");
+  assert.equal(syncState({ record: {}, designChanged: true, codeChanged: true, overlap: true }), "both-changed");
+  assert.equal(syncState({ record: {}, designChanged: true, codeChanged: true, overlap: false }), "diverged");
   assert.equal(syncState({ record: {}, codeChanged: true }), "code-changed");
   assert.equal(syncState({ record: {} }), "in-sync");
 });

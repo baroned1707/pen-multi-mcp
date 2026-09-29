@@ -418,7 +418,8 @@ test("sync: MATCH records the pair; later, verify says which side changed and as
   assert.match(t, /- Design: .*~ Checkout · light\/Content\/Summary\/Total text "Total 42.00" → "Total 99.00"/);
   assert.match(t, /- Code: .*Checkout · light\/Header\/Title fg/);
   assert.match(t, /text color: .*\(code changed since the last match\)/);
-  assert.match(t, /Next: stop and ask the user which side wins/);
+  // The total's text changed in the design and its size in the code: the same node, a conflict.
+  assert.match(t, /Next: the same nodes changed on both sides — stop and ask the user which side wins/);
   assert.ok(fs.readFileSync(path.join(dir, /Recorded as the last match in (\S+) /.exec(first)[1]), "utf8") === JSON.stringify(rec, null, 1) + "\n", "DIFFERS never overwrites the record");
 });
 
@@ -440,4 +441,21 @@ test("any-platform sources: a snapshot file or a trusted command verifies like a
   const res = await client.readResource({ uri: "pen-multi://snapshot-schema" });
   assert.deepEqual(JSON.parse(res.contents[0].text), SNAPSHOT_SCHEMA);
   assert.deepEqual(JSON.parse(fs.readFileSync(new URL("../docs/snapshot-schema.json", import.meta.url), "utf8")), SNAPSHOT_SCHEMA, "docs/snapshot-schema.json is current");
+});
+
+test("sync: both sides changed in different places is 'diverged' — carry each change across, no need to ask", async () => {
+  await call(client, "save", { filePath: file });
+  const copy = path.join(dir, "diverged.pen");
+  fs.copyFileSync(file, copy);
+  const faithful = fs.readFileSync(path.join(dir, "faithful.html"), "utf8");
+  fs.writeFileSync(path.join(dir, "bigger-total.html"), faithful.replace("</body>", `<script>addEventListener("DOMContentLoaded", () => { document.querySelector('[data-pen="Total"]').style.fontSize = "24px"; });</script></body>`));
+  const v = (page) => call(client, "verify", { filePath: copy, target: "Checkout · light", source: { kind: "web", url: url(page) }, crops: 0 });
+  assert.match(text(await v("faithful.html")), /Recorded as the last match/);
+  const titleId = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: copy, input: `Print("N", JSON.stringify(Get((n) => n.name === "Title" ? n.id : undefined).filter(Boolean)))` })))[1])[0];
+  await call(client, "execute", { filePath: copy, input: `Update(${JSON.stringify(titleId)}, { content: "Pay" })` });
+  await call(client, "save", { filePath: copy });
+  const t = text(await v("bigger-total.html"));
+  assert.match(t, /- Design: .*Title text "Checkout" → "Pay"/);
+  assert.match(t, /- Code: .*Total fontSize/);
+  assert.match(t, /Next: both sides changed, in different places — carry each change to the other side/);
 });

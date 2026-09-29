@@ -142,10 +142,14 @@ export function codeFilesChanged(record, files, root = process.cwd()) {
   }
 }
 
-/** A frame's state from what changed on each side. */
-export function syncState({ record, lastVerdict, designChanged, codeChanged }) {
+/**
+ * A frame's state from what changed on each side. Both sides changed is a conflict
+ * ("both-changed") only when they touched the same nodes (`overlap`); changes in different places
+ * ("diverged") can each be carried to the other side. `overlap` undefined means unknown: a conflict.
+ */
+export function syncState({ record, lastVerdict, designChanged, codeChanged, overlap }) {
   if (!record) return lastVerdict ? (lastVerdict === "match" ? "match" : "differs") : "never";
-  if (designChanged && codeChanged) return "both-changed";
+  if (designChanged && codeChanged) return overlap === false ? "diverged" : "both-changed";
   if (designChanged) return "design-changed";
   if (codeChanged) return "code-changed";
   return "in-sync";

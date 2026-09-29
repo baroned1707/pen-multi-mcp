@@ -353,7 +353,8 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
           const inD = hits(dz, f.address), inC = hits(cz, f.address);
           f.since = inD && inC ? "both" : inD ? "design" : inC ? "code" : undefined;
         }
-        sync = { state: syncState({ record: prior, designChanged: dz.length + frameChange.length > 0, codeChanged: cz.length > 0 }), recordedAt: prior.verifiedAt, design: diffText(designDiff), code: diffText(codeDiff) };
+        const overlap = dz.some((a) => hits(cz, a));
+        sync = { state: syncState({ record: prior, designChanged: dz.length + frameChange.length > 0, codeChanged: cz.length > 0, overlap }), recordedAt: prior.verifiedAt, design: diffText(designDiff), code: diffText(codeDiff) };
       }
       fs.writeFileSync(
         files.report,
@@ -393,7 +394,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       if (sync?.state) {
         reportLines.push("", `## Since the last match (${sync.recordedAt})`, `- Design: ${sync.design || "no change"}`, `- Code: ${sync.code || "no change"}`);
       }
-      const syncNext = sync?.state && direction !== "code-to-design" && ["design-changed", "code-changed", "both-changed"].includes(sync.state) ? sync.state : null;
+      const syncNext = sync?.state && direction !== "code-to-design" && ["design-changed", "code-changed", "both-changed", "diverged"].includes(sync.state) ? sync.state : null;
       reportLines.push("", nextStep({ state: syncNext ?? (result.summary.verdict === "match" ? "match" : "differs"), id, direction, others }));
       const res = design.wrap(target, reportLines);
       if (uiImg && crops > 0) {
