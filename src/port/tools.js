@@ -63,7 +63,7 @@ export function registerPortTools({ tool, z, route, design, optionalFilePath, co
 
   tool(
     "port",
-    `A durable queue for porting a design screen by screen until verify reports MATCH — survives context compaction and is shared by parallel subagents. action "plan" lists every frame (screen × state × width × theme, filterable) with its route/state config; "next" claims the next screen (pass claim: "<your name>" when several agents work in parallel) and returns its id, page, state setup, last findings and the loop; "done" marks it finished only if its latest verify is MATCH for the current design; "skip"/"block" with a reason; "status" shows progress. verify records every run on the queue.`,
+    `Use when implementing more than one screen (or state, width, theme) of a design: a durable queue that survives context compaction and is shared by subagents. A durable queue for porting a design screen by screen until verify reports MATCH — survives context compaction and is shared by parallel subagents. action "plan" lists every frame (screen × state × width × theme, filterable) with its route/state config; "next" claims the next screen (pass claim: "<your name>" when several agents work in parallel) and returns its id, page, state setup, last findings and the loop; "done" marks it finished only if its latest verify is MATCH for the current design; "skip"/"block" with a reason; "status" shows progress. verify records every run on the queue.`,
     {
       filePath: optionalFilePath,
       action: z.enum(["plan", "next", "done", "skip", "block", "status"]),

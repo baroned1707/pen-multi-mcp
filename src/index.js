@@ -22,6 +22,7 @@ import { registerPortTools } from "./port/tools.js";
 import { conventions } from "./design/tools.js";
 import { cliVersion } from "./shell.js";
 import { registerDesignTools } from "./design/tools.js";
+import { registerPrompts } from "./prompts.js";
 
 const timings = new Timings();
 const saver = new SaveScheduler({
@@ -48,18 +49,21 @@ Where a call runs:
 - ${config.autosave ? "Every successful change is saved to disk automatically, in the background right after the call returns (in the app too, which also saves the user's own unsaved edits in that document). Call save before reading a .pen file from disk or committing it: it waits for the background save." : "Changes are not saved automatically: call save."}
 - Each response starts with "File: <path>" and says where it ran. A file is never silently routed to another document.
 
-Implementing or refactoring UI from a design (port mode):
-- The design is the source of truth for structure, order, content and styling. "Update the existing component" means change it until it matches the design, never keep what is there; rebuild the app shell, navigation or a component when its structure differs.
-- Before editing code: call overview, then inspect the target screen (save it with savePath and re-read that file after context compaction). List the structural differences between the design and the current UI (shell, navigation, section order, missing or extra elements) and work through that list.
-- If project rules conflict with matching the design (e.g. "preserve the theme"), ask the user once which wins and follow the answer.
-- Before porting a screen, run lint on it: a raw color, a default-named layer or a clipped text in the design becomes a bug in code. Fix what lint can fix (fix: ["names", "tokens"]) and ask the user about the rest. Keep code tokens in sync with tokens (compare the project's token file).
-- Never port from screenshots or from memory: read the design as data with inspect. Screenshots are for a human sanity check, not for measurements.
-- Reuse what the code has: inspect names the code component of each mapped instance (file:line) and shows tokens under their code names. Mark a component's definition in code with data-pen="<component id>" (or "pen:<id>") to map it; set .pen-multi.json { "tokens": { "file": "<token file>" } } for token names. inspect on a screen name with several frames gives one frame in full and the others (widths, themes, states) as differences.
-- verify findings end with the code location (→ file:line) from markers and the design token to use; fix there.
-- While implementing, mark elements with the layer address inspect prints: data-pen="Header/Title" on web, testID="pen:Header/Title" in React Native (add probe/react-native/PenProbe.js to the app root once).
-- Screens built in code first: import_ui brings them into the design as a frame to refine. sync_status shows which screens were verified against the code, which are stale, and which never were; routes in .pen-multi.json let verify find each screen's page.
-- Porting many screens: use the port tool. port plan once; then repeat port next → inspect → implement → verify → fix until MATCH → port done, and do not stop while port next still hands out work (block an item with its reason after its attempts run out, then continue). Put the app into a screen's state with verify's source.mocks / steps, or a states entry in .pen-multi.json. Parallel subagents each pass their own claim name to port next.
-- A port is done only when verify reports MATCH for every implemented screen × width × theme: run it against the running app (web URL, pen-probe, native device, or a screenshot), fix the high findings first (missing, extra, order), then the rest, and re-run. Do not report a screen as done from a screenshot.
+Design ↔ code — which tool, when:
+- See every screen, state, component and token: overview.
+- Implement or refactor one screen: inspect it (the outline in its own theme, the code components and tokens it maps to), implement it, mark elements with the address inspect prints (data-pen="Header/Title" on web, testID="pen:Header/Title" in React Native), then verify against the running app until MATCH.
+- Implement many screens: port (plan once, then next → inspect → implement → verify → done; never stop while next hands out work). The port-design prompt walks through it.
+- A screen that exists only in code: import_ui, then verify the new frame.
+- The code changed and the design should follow: verify with direction "code-to-design", apply the proposed edits you agree with (execute), verify again.
+- Where design and code stand, screen by screen: sync_status.
+- Before porting: lint the screen (fix: ["names", "tokens"]) and keep tokens in sync with the code's token file (tokens compare).
+
+Rules for both directions:
+- The design is the source of truth when porting: "update the existing component" means change it until it matches; rebuild the shell, navigation or a component whose structure differs. If project rules conflict (e.g. "preserve the theme"), ask the user once.
+- Read the design as data (inspect), never from screenshots or memory; screenshots are for the overall look.
+- Done means verify MATCH for every implemented screen × width × theme, against the running app (web URL, pen-probe, native device, or a screenshot) — never from a screenshot alone. Fix high findings first (missing, extra, order); each finding names the code location (→ file:line) and the token to use.
+- When both the design and the code changed since they last matched, do not overwrite either: report both change lists and ask the user which side wins.
+- Results end with "Next:": follow it unless the user said otherwise. "Note:" lines point at something that needs attention.
 
 Many agents and projects:
 - Relative filePaths resolve against this agent's working directory (${process.cwd()}).
@@ -68,6 +72,7 @@ Many agents and projects:
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
 const server = new McpServer({ name: "pen-multi", version: "1.3.0" }, { instructions: INSTRUCTIONS });
+registerPrompts(server, z);
 
 const filePath = z
   .string()

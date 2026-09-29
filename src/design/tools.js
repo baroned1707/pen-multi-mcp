@@ -8,6 +8,7 @@ import { buildModel } from "./model.js";
 import { outline, sectionLines, sections, textDefaults, toJson } from "./inspect.js";
 import { projectMapping } from "../mapping/index.js";
 import { pickBase, variantLines } from "./variants.js";
+import { nextStep } from "../guide.js";
 import { crop, pngBuffer, readPng, resize } from "../verify/image.js";
 import { analyze, renderOverview } from "./overview.js";
 import { ReadError, readOverview, readSubtree } from "./read.js";
@@ -80,7 +81,7 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
 
   tool(
     "overview",
-    `The big picture of a .pen document, before designing or implementing anything: every screen as a matrix (screen + state × width, with the themes each cell is drawn in, empty cells shown), canvas bands in reading order, flows between screens (inferred from arrows, or declared), components with where they are used, the type and spacing scales in use, raw colors, and the intent notes left in the file. Use focus to zoom into one screen or code (e.g. "S3", "Checkout"), which also lists each frame's node id for inspect. A .pen-multi.json next to the file can declare { "screenPattern": "<regex with named groups screen, state, width, theme>", "flows": ["path/to/flow.json"] }.`,
+    `Use when starting design work on a .pen: every screen, state, width, theme, component and token at a glance. Not for one screen's details (inspect). The big picture of a .pen document, before designing or implementing anything: every screen as a matrix (screen + state × width, with the themes each cell is drawn in, empty cells shown), canvas bands in reading order, flows between screens (inferred from arrows, or declared), components with where they are used, the type and spacing scales in use, raw colors, and the intent notes left in the file. Use focus to zoom into one screen or code (e.g. "S3", "Checkout"), which also lists each frame's node id for inspect. A .pen-multi.json next to the file can declare { "screenPattern": "<regex with named groups screen, state, width, theme>", "flows": ["path/to/flow.json"] }.`,
     {
       filePath: optionalFilePath,
       focus: z.string().optional().describe("Screen code, name fragment or node id to narrow the output to."),
@@ -166,6 +167,25 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
     for (const n of model.nodes.values()) if (n.component && !n.id.includes("/")) used.set(n.component.name, (used.get(n.component.name) ?? 0) + 1);
     if (used.size) lines.push(`Components used: ${[...used].map(([k, v]) => `${k} ×${v}`).join(", ")}`);
     return lines;
+  }
+
+  /** When a frame was last verified against an older version of the design: its date, else null. */
+  function staleSince(target, id) {
+    if (target.mode === "app") return null;
+    const dir = path.join(process.cwd(), "design-verify");
+    const tag = createHash("sha1").update(`${target.file}\n${id}`).digest("hex").slice(0, 6);
+    let latest = null;
+    try {
+      for (const n of fs.readdirSync(dir)) {
+        if (!n.endsWith(`-${tag}.json`)) continue;
+        const r = JSON.parse(fs.readFileSync(path.join(dir, n), "utf8"));
+        if (r?.target?.id === id && (!latest || r.generatedAt > latest.generatedAt)) latest = r;
+      }
+    } catch {
+      return null;
+    }
+    const now = fileHash(target.file);
+    return latest?.pen?.sha1 && now && latest.pen.sha1 !== now ? latest.generatedAt : null;
   }
 
   // Renders already attached in this session: file|id|design hash.
@@ -262,7 +282,7 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
 
   tool(
     "inspect",
-    `Read one screen or node of a .pen design as data to implement from, instead of looking at screenshots: where it sits (other widths, states, themes, flows in and out, components used), its sections in order with the app shell (docked header, tab bar) marked, and an outline with one line per node: absolute position and size, sizing (fill/hug/fixed), auto-layout, colors as token name plus the value in every theme, typography with line height in px, components and overrides, clipping. Repeated rows are collapsed. flavor adds code hints per node (tailwind, css or react-native) following pen.dev's layout rules. format "json" returns the full data for scripts; "html-ref" writes Pen's HTML export with its box-sizing bug fixed and layer names as data-pen. savePath writes the JSON (with the .pen's hash) so it can be re-read after context compaction.`,
+    `Use when implementing or checking one screen or component: the design as data to build from. Not for a picture of it (the first call attaches one) or for the whole file (overview). Read one screen or node of a .pen design as data to implement from, instead of looking at screenshots: where it sits (other widths, states, themes, flows in and out, components used), its sections in order with the app shell (docked header, tab bar) marked, and an outline with one line per node: absolute position and size, sizing (fill/hug/fixed), auto-layout, colors as token name plus the value in every theme, typography with line height in px, components and overrides, clipping. Repeated rows are collapsed. flavor adds code hints per node (tailwind, css or react-native) following pen.dev's layout rules. format "json" returns the full data for scripts; "html-ref" writes Pen's HTML export with its box-sizing bug fixed and layer names as data-pen. savePath writes the JSON (with the .pen's hash) so it can be re-read after context compaction.`,
     {
       filePath: optionalFilePath,
       target: z.string().describe("Node id, or a screen name / code (e.g. \"S3 · Trang tin · sáng\", \"M5\"). Use overview with focus to find ids."),
@@ -398,6 +418,11 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
         const o = { compact: true, codeName: map.codeName, component: map.component };
         const defaults = textDefaults(model, o);
         lines.push("", `## Outline (values in this frame's theme${defaults ? "; text defaults below" : ""}; detail "full" lists every theme)`, ...(defaults ? [defaults.line] : []), ...outline(model, { depth, maxLines, flavor, continueWith: more, ...o, defaults }));
+      }
+      if (format === "outline") {
+        const stale = staleSince(target, id);
+        if (stale) lines.push("", `Note: the design of this frame changed since its last verify (${stale}); the code may still show the old version.`);
+        lines.push("", nextStep({ state: "inspected", id }));
       }
       if (variantsOf) {
         const MAX_VARIANTS = 12;

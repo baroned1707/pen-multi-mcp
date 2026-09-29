@@ -8,6 +8,7 @@ import { ReadError, readSubtree } from "../design/read.js";
 import { colorTokens } from "../lint/rules.js";
 import { readPng } from "../verify/image.js";
 import { USAGE_SNIPPET, propertyNumbers } from "../verify/reverse.js";
+import { nextStep } from "../guide.js";
 import { slug } from "../verify/tools.js";
 import { buildSpecs, imageCropper, safeName, snippets, tokenOrHex } from "./build.js";
 
@@ -99,7 +100,7 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
 
   tool(
     "import_ui",
-    "Rebuild a running screen of the app as an editable frame in the .pen (code → design): painted boxes become frames (fill, radius, border), texts become text nodes (content, size, weight, family, color, line height), images and icons become crops of the screenshot, placed where the UI draws them; colors that equal a document token use the token. Use it to bring an implemented screen into the design, to start a design from existing code, or to compare side by side. Sources as for verify (web, probe, native). The new frame is placed right of the existing content.",
+    "Use when a screen exists only in code and should become a design frame. Not for updating a frame that already exists (verify with direction \"code-to-design\"). Rebuild a running screen of the app as an editable frame in the .pen (code → design): painted boxes become frames (fill, radius, border), texts become text nodes (content, size, weight, family, color, line height), images and icons become crops of the screenshot, placed where the UI draws them; colors that equal a document token use the token. Use it to bring an implemented screen into the design, to start a design from existing code, or to compare side by side. Sources as for verify (web, probe, native). The new frame is placed right of the existing content.",
     {
       filePath: optionalFilePath,
       source: source.optional(),
@@ -161,6 +162,7 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
         cleanliness(specs),
         ...(snapshot.truncated ? ["The page has more elements than a capture keeps (6,000): the import is partial; import a narrower state or screen."] : []),
         layout.line,
+        nextStep({ state: "imported", id: rootId }),
         "Name the layers, replace crops with icons or components where they exist, and turn the remaining absolute sections into auto layout where the design should flow. lint the frame to see what is left.",
       ]);
     },
@@ -168,7 +170,7 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
 
   tool(
     "sync_status",
-    "Where design and code stand: every screen × width × theme of the document with its route (from .pen-multi.json routes), its last verify verdict and age, and whether the design changed since (stale). Lists what to verify next.",
+    "Use when you need to know where design and code stand, screen by screen, and what to run next. Where design and code stand: every screen × width × theme of the document with its route (from .pen-multi.json routes), its last verify verdict and age, and whether the design changed since (stale). Lists what to verify next.",
     { filePath: optionalFilePath, maxLines: z.number().int().min(10).max(2000).optional().describe("Rows listed (default 200).") },
     async ({ filePath: f, maxLines = 200 }) => {
       const target = await route(f);

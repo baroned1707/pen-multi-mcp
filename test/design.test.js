@@ -294,3 +294,8 @@ test("a partial name match is still ambiguous, not variants of another screen", 
   assert.equal(res.isError, true, text(res));
   assert.match(text(res), /matches \d+ frames/);
 });
+
+test("inspect ends with Next: implement, mark, verify", async () => {
+  const t = text(await call(client, "inspect", { filePath: file, target: "Checkout · light", image: false }));
+  assert.match(t, /Next: implement it in the code, marking elements .* then verify\(\{ target: "\w+", source: <the running app> \}\)\./);
+});

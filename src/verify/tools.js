@@ -13,6 +13,7 @@ import { verifyScreen } from "./pipeline.js";
 import { contactSheet, findingCrops, renderReport, sheetRow } from "./report.js";
 import { pointFindingsAtCode } from "./code.js";
 import { USAGE_SNIPPET, designEdits, editLines, propertyNumbers } from "./reverse.js";
+import { nextStep } from "../guide.js";
 import { projectMapping } from "../mapping/index.js";
 
 const OUT_DIR = "design-verify";
@@ -45,6 +46,7 @@ const describeSource = (src) =>
   (src.mocks?.length ? ` with ${src.mocks.length} mock${src.mocks.length > 1 ? "s" : ""}` : "");
 
 export function registerVerifyTools({ tool, z, route, design, withMachineLock, optionalFilePath, ok, conventions, saver, hooks = {} }) {
+  const repeats = new Map(); // file|frame -> { sig, count }: the same findings verify after verify
   // The page a screen is served at: .pen-multi.json { baseUrl, routes: { "<screen name, code or frame name>": "/path" } }.
   /**
    * .pen-multi.json `states`: how to show a frame's state ({ route?, steps?, mocks?, deepLink? }),
@@ -159,7 +161,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
 
   tool(
     "capture",
-    "Capture the implemented UI as data: every visible element's box, text, colors, typography and pen marker, plus a screenshot. Sources: a web URL (headless, no window), a React Native/Expo dev build with <PenProbe>, any Android/iOS app via uiautomator/maestro, or a screenshot file. verify captures by itself; use capture to keep a snapshot or to look at what the UI renders.",
+    "Use when you need what the running UI renders (elements and screenshot) without comparing it. Not for checking against the design (verify). Capture the implemented UI as data: every visible element's box, text, colors, typography and pen marker, plus a screenshot. Sources: a web URL (headless, no window), a React Native/Expo dev build with <PenProbe>, any Android/iOS app via uiautomator/maestro, or a screenshot file. verify captures by itself; use capture to keep a snapshot or to look at what the UI renders.",
     {
       source,
       width: z.number().positive().optional().describe("web: viewport width (default 390)."),
@@ -218,7 +220,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
 
   tool(
     "verify",
-    `Check an implementation against its design and get the differences as text: design nodes missing from the UI, UI text that is not in the design (old UI left behind), section order, and size, position, color, typography, radius and border differences beyond tolerance, plus pixel regions named after the design nodes there. Works for web (URL, headless), React Native/Expo (pen-probe), native Android/iOS (uiautomator/maestro) and plain screenshots. A port is done when the verdict is MATCH for every implemented screen × width × theme. Writes the full JSON report and a contact sheet PNG to ${OUT_DIR}/.`,
+    `Use when a screen is implemented (or changed) in code, to know whether it matches the design — and with direction "code-to-design" when the design should follow the code. Not for looking at a page (capture). Check an implementation against its design and get the differences as text: design nodes missing from the UI, UI text that is not in the design (old UI left behind), section order, and size, position, color, typography, radius and border differences beyond tolerance, plus pixel regions named after the design nodes there. Works for web (URL, headless), React Native/Expo (pen-probe), native Android/iOS (uiautomator/maestro) and plain screenshots. A port is done when the verdict is MATCH for every implemented screen × width × theme. Writes the full JSON report and a contact sheet PNG to ${OUT_DIR}/.`,
     {
       filePath: optionalFilePath,
       target: z.string().describe("Screen name, code or node id, as for inspect."),
@@ -314,8 +316,16 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         const elements = (snapshot.elements ?? []).map((e) => ({ ...e, box: e.box && { x: e.box.x * s, y: e.box.y * s, w: e.box.w * s, h: e.box.h * s } }));
         const usage = await run(USAGE_SNIPPET);
         const edits = designEdits(result.findings, { model, theme: frameTheme ?? rootTheme ?? null, elements, numbers: propertyNumbers(model.variables, usage.text) });
-        reportLines = [...reportLines.filter((l) => !l.startsWith("Fix the high findings first")), ...editLines(edits, { designChanged: Boolean(previousHash && penHash && previousHash !== penHash) })];
+        reportLines = [...reportLines, ...editLines(edits, { designChanged: Boolean(previousHash && penHash && previousHash !== penHash) })];
       }
+      // The same findings again and again: the fixes are not landing where verify looks.
+      const sig = result.findings.filter((x) => x.severity !== "low").map((x) => `${x.kind}:${x.address ?? x.uiIndex}`).sort().join("|");
+      const seen = repeats.get(`${target.file}|${id}`);
+      const count = seen && seen.sig === sig && sig ? seen.count + 1 : 1;
+      repeats.set(`${target.file}|${id}`, { sig, count });
+      if (count >= 3 && result.summary.verdict !== "match") reportLines.push("", `Note: verify returned the same findings ${count} times in a row. Check that the page shows your change (route, state, dev server reloaded, the right file), or change approach.`);
+      const others = picked?.row ? Object.values(picked.row.cells).flat().map((c) => c.id).filter((x) => x !== id) : [];
+      reportLines.push("", nextStep({ state: result.summary.verdict === "match" ? "match" : "differs", id, direction, others }));
       const res = design.wrap(target, reportLines);
       if (uiImg && crops > 0) {
         for (const { finding, image } of findingCrops({ designImg, uiImg, frame: d.frame, findings: result.findings, uiWidth: snapshot.viewport?.w, n: crops })) {
@@ -328,7 +338,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
 
   tool(
     "contact_sheet",
-    "One image comparing screens side by side, a row per verify report: the design, the implemented UI, and the UI with each finding's numbered box (missing nodes are boxed on the design). For people and for a quick look; the verify text report is the reliable signal.",
+    "Use when showing a person several verify results side by side. One image comparing screens side by side, a row per verify report: the design, the implemented UI, and the UI with each finding's numbered box (missing nodes are boxed on the design). For people and for a quick look; the verify text report is the reliable signal.",
     {
       reports: z.array(z.string()).min(1).max(40).describe("verify report JSON paths (design-verify/<screen>.json)."),
       savePath: z.string().optional().describe("PNG path (default design-verify/contact-sheet.png)."),

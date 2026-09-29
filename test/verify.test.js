@@ -389,3 +389,12 @@ test("code-to-design: proposed edits for clear causes; applied to a copy of the 
   for (const k of ["text-color", "font-size", "missing"]) assert.ok(!left.includes(k), `${k} fixed in the design: ${left.join(", ")}`);
   assert.ok(!rep.findings.some((f) => f.kind === "extra" && /Old promo banner/.test(f.message)), "the promo text now exists in the design");
 });
+
+test("verify ends with Next:, and notes the same findings coming back three times", async () => {
+  let t;
+  for (let i = 0; i < 3; i++) t = text(await verify({ source: { kind: "web", url: url("drift.html") }, crops: 0 }));
+  assert.match(t, /Next: fix the high findings first/);
+  assert.match(t, /Note: verify returned the same findings \d+ times in a row/);
+  const ok = text(await verify({ source: { kind: "web", url: url("faithful.html") }, crops: 0 }));
+  assert.match(ok, /Next: this frame is done/);
+});

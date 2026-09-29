@@ -28,7 +28,6 @@ export function renderReport({ meta, summary, findings, notCompared = [], files 
   if (hints.length) lines.push("", "## Hints", ...hints.map((h) => `- ${h}`));
   const written = Object.entries(files).filter(([, v]) => v);
   if (written.length) lines.push("", "## Files", ...written.map(([k, v]) => `- ${k}: ${v}`));
-  if (summary.verdict !== "match") lines.push("", "Fix the high findings first (structure: missing, extra, order), then re-run verify with the same arguments.");
   return lines;
 }
 

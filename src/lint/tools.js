@@ -14,7 +14,7 @@ const FIXABLE = { names: "default-name", tokens: "raw-color" };
 export function registerLintTools({ tool, z, route, design, executeSnippet, optionalFilePath }) {
   tool(
     "lint",
-    `Check a .pen design for what makes it hard to implement faithfully or to use: raw colors where a token exists, text contrast below WCAG AA, touch targets under 44×44 on phone screens, default layer names ("Frame 12"), off-scale font sizes and spacing, hidden or clipped leftovers, near-misaligned and unevenly spaced siblings in free layouts, engine-reported layout problems, and screens missing a theme most screens have. Without target it checks the document's screens (up to maxScreens). fix: ["names", "tokens"] applies the unambiguous fixes (rename default-named layers after their text or component; replace a raw color with the one token that has exactly that value) and reports what it changed.`,
+    `Use before porting a screen, or after editing the design: problems in the design that would become bugs in code, with safe fixes. Check a .pen design for what makes it hard to implement faithfully or to use: raw colors where a token exists, text contrast below WCAG AA, touch targets under 44×44 on phone screens, default layer names ("Frame 12"), off-scale font sizes and spacing, hidden or clipped leftovers, near-misaligned and unevenly spaced siblings in free layouts, engine-reported layout problems, and screens missing a theme most screens have. Without target it checks the document's screens (up to maxScreens). fix: ["names", "tokens"] applies the unambiguous fixes (rename default-named layers after their text or component; replace a raw color with the one token that has exactly that value) and reports what it changed.`,
     {
       filePath: optionalFilePath,
       target: z.string().optional().describe("One screen (name, code or node id). Omit for the whole document."),
@@ -106,7 +106,7 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
 
   tool(
     "tokens",
-    "Export the design's variables (colors, numbers, strings, per theme) as code — css (custom properties with a selector per theme and prefers-color-scheme for dark), tailwind (theme.extend pointing at the CSS variables), json (W3C design tokens, one group per theme) or react-native (a typed tokens object per theme) — and/or compare them with a token file in the code to list missing, changed and extra tokens. Keeps code and design on the same values.",
+    "Use when the code's design tokens must match the design's variables: generate them, or compare with the project's token file. Export the design's variables (colors, numbers, strings, per theme) as code — css (custom properties with a selector per theme and prefers-color-scheme for dark), tailwind (theme.extend pointing at the CSS variables), json (W3C design tokens, one group per theme) or react-native (a typed tokens object per theme) — and/or compare them with a token file in the code to list missing, changed and extra tokens. Keeps code and design on the same values.",
     {
       filePath: optionalFilePath,
       format: z.enum(["css", "tailwind", "json", "react-native"]).optional().describe("Output format (default css)."),
