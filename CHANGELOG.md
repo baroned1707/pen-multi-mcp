@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.0 — 2026-09-29
+
+- **Fonts**: a headless editor lays text out in a fallback font until its fonts load (~2 s after the first layout); verify, inspect, lint, import_ui and sync_status on a just-opened file measured the fallback, so a matching screen could report DIFFERS (trading-agent: 26 findings, then MATCH on the next call). Measuring tools now wait per editor and font family until text sizes settle (`PEN_MULTI_FONT_SETTLE_MS`, 0 turns it off). The web capture also loads every declared `@font-face` before measuring.
+- **Code → design layout**: verify with direction `code-to-design` infers container edits from where the UI draws the matched children — gap, leading padding, order (`Move`), fixed sizes, absolute positions — each listing the findings it explains; uneven spacing or unmatched children get a reason instead. Gap and padding use a spacing token when the document puts one on those properties.
+- **Sync**: both sides changing is a conflict only when they edited the same node on purpose; a node moved by a layout change on the other side no longer counts.
+- **Real-app eval** (`npm run eval:real`, spec `docs/superpowers/specs/2026-09-29-real-app-eval-design.md`): seeded design mutations on frames that match on a real app's committed state (cloned to a temp folder, never touching the repository), with design-to-code, code-to-design and both tasks judged by verify and the side edited. trading-agent, n = 3 per kind, before the layout and conflict fixes: design → code 3/3, code → design 3/3, both 2/3 (the failure led to the conflict fix).
+
 ## 1.5.0 — 2026-09-29
 
 - **Observability** (spec: `docs/superpowers/specs/2026-09-29-observability-design.md`): one event per tool call in `~/.pen-multi/events/` (measurements only — no arguments, texts or code; 30 days, 20 MB a day, `PEN_MULTI_EVENTS=0` to turn off), and `node bin/pen-multi.js report` for latency, errors, tokens, verify runs until MATCH, finding kinds, Next: followed, reminders and app waits. The eval attaches each run's MCP numbers.
