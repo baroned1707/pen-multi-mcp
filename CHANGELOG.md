@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.7.0 — 2026-09-29
+
+import_ui that looks drawn, not dumped (spec: `docs/superpowers/specs/2026-09-29-import-clean-design.md`). Measured on four trading-agent screens with `bench/eval/real/import-quality.mjs`:
+
+| | before | 1.7.0 |
+|---|---|---|
+| round trip MATCH | 0/4 | 4/4 (3/4 with `components: true`) |
+| icons as icon nodes / crops | 0 / 28 | 25–29 / 3–7 |
+| layer names that are selectors | 41 | 10 |
+
+- **Icons**: icon elements are compared as shapes with the icons the document uses (rendered once in a scratch file); a clear winner becomes an icon node, with the crop as its fallback.
+- **Names** from the code: marker, React component (from the fiber), aria-label, id, a class that reads as a name; the selector is the last resort.
+- **Grids and wrapping rows** become rows of auto layout (checked against the page like any auto layout).
+- **`components: true`**: repeated structures become a component and instances overriding whatever differs.
+- Fixes found on the real app:
+  - a marker on a textless element (a tab link) no longer claims its label's text node;
+  - letter spacing is captured and imported;
+  - a generic marker ("Row") only makes an instance of the same-named component when its texts line up;
+  - a marker shared by several elements pairs each design node with its nearest element.
+
 ## 1.6.1 — 2026-09-29
 
 - Sync: findings are tagged with the side that edited them, and only with the side that merely moved them (a layout change elsewhere) when neither edited them; the frame's own background changing in the design no longer made every code edit a conflict.
