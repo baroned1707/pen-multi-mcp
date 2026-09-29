@@ -140,8 +140,9 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
       colorScheme: z.enum(["light", "dark"]).optional().describe("web: prefers-color-scheme."),
       images: z.boolean().optional().describe("Crop images and icons from the screenshot into images/ next to the .pen (default true)."),
       theme: z.string().optional().describe("Theme whose token values colors are matched against (default: the first)."),
+      components: z.boolean().optional().describe("Turn runs of 3+ siblings with the same structure into a component (the first) and instances of it with their texts as overrides. Off by default: it adds components to the document."),
     },
-    async ({ filePath: f, source: src, snapshot: snapPath, name, width = 390, height = 844, colorScheme, images = true, theme }) => {
+    async ({ filePath: f, source: src, snapshot: snapPath, name, width = 390, height = 844, colorScheme, images = true, theme, components: makeComps = false }) => {
       if (!src && !snapPath) throw new ReadError("Pass source (to capture now) or snapshot (a capture file).");
       const target = await route(f, { write: true });
       let snapshot;
@@ -167,7 +168,7 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
       const numbers = propertyNumbers(ctx.variables, usage.text);
       const components = await markedComponents(target, snapshot);
       const iconMatches = shot ? await recogniseIcons(target, snapshot, shot, scale) : { map: new Map(), tried: 0 };
-      const specs = buildSpecs(snapshot, { tokens, numbers, components, images: cropper, icons: iconMatches.map, frameHeight: vh });
+      const specs = buildSpecs(snapshot, { tokens, numbers, components, images: cropper, icons: iconMatches.map, frameHeight: vh, makeComponents: makeComps });
       const frameName = safeName(name ?? `${snapshot.url ? new URL(snapshot.url).pathname.replace(/^\/+/, "") || "home" : snapshot.platform ?? "screen"} (from code)`);
       const pageBg = tokenOrHex(snapshot.pageBg, tokens) ?? "#FFFFFF";
       const screen = { type: "frame", name: frameName, x: Math.ceil(ctx.right + 200), y: 0, width: Math.round(vw), height: Math.round(vh), layout: "none", clip: true, fill: pageBg, ...(axis ? { theme: { [axis]: theme } } : {}) };
@@ -193,6 +194,7 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
         cleanliness(specs),
         ...(snapshot.truncated ? ["The page has more elements than a capture keeps (6,000): the import is partial; import a narrower state or screen."] : []),
         layout.line,
+        specs.components?.length ? `Components made: ${specs.components.map((c) => `${c.name} (${c.count - 1} instances)`).join(", ")}.` : makeComps ? "Components made: none (no run of 3+ siblings with the same structure and texts)." : "",
         iconMatches.tried ? `Icons: ${iconMatches.map.size - iconFallbacks} of ${iconMatches.tried} icon elements are icon nodes (recognised among the document's icons)${iconFallbacks ? `; ${iconFallbacks} rejected by the engine, kept as crops` : ""}; the rest are crops.` : "",
         nextStep({ state: "imported", id: rootId }),
         "Name the layers, replace crops with icons or components where they exist, and turn the remaining absolute sections into auto layout where the design should flow. lint the frame to see what is left.",

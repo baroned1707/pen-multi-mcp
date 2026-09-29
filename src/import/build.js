@@ -86,7 +86,7 @@ function textPlacement(el, origin) {
  * Elements that paint nothing are dropped and their children re-parented to the nearest kept
  * ancestor, so the imported tree is only as deep as what is visible.
  */
-export function buildSpecs(snapshot, { tokens = [], numbers = null, components = null, images = null, icons = null, frameHeight, autoLayout = true } = {}) {
+export function buildSpecs(snapshot, { tokens = [], numbers = null, components = null, images = null, icons = null, frameHeight, autoLayout = true, makeComponents: make = false } = {}) {
   const byIndex = new Map(snapshot.elements.map((el) => [el.i, el]));
   const kept = new Map(); // element index -> spec key (frames only: a text node cannot hold children)
   const specs = [];
@@ -225,6 +225,55 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
     applyRows(specs, byIndex, layouts);
     applyAutoLayout(specs, byIndex, layouts);
   }
+  if (make) makeComponents(specs);
+  return specs;
+}
+
+/**
+ * Runs of three or more sibling frames with the same structure (types and sizes, recursively)
+ * become one component: the first is made reusable, the others instances of it whose texts are
+ * overrides, matched in order. Groups whose texts do not line up are left alone. Sets
+ * `specs.components` to [{ name, count }].
+ */
+export function makeComponents(specs) {
+  const kids = new Map();
+  for (const s of specs) if (s.parent) (kids.get(s.parent) ?? kids.set(s.parent, []).get(s.parent)).push(s);
+  const sig = (s) => `${s.props.type}:${Math.round(s.props.width ?? 0)}x${Math.round(s.props.height ?? 0)}(${(kids.get(s.key) ?? []).map(sig).join(",")})`;
+  const subtree = (s) => (kids.get(s.key) ?? []).flatMap((c) => [c, ...subtree(c)]);
+  // What an instance may override, per node: anything that makes it look different.
+  const LOOK = ["content", "fill", "stroke", "strokeWidth", "icon", "library", "fontWeight", "fontSize", "fontFamily", "lineHeight", "letterSpacing", "textAlign", "cornerRadius", "opacity", "enabled"];
+  const diff = (m, s) => {
+    const out = {};
+    for (const k of LOOK) if (JSON.stringify(m.props[k]) !== JSON.stringify(s.props[k]) && s.props[k] !== undefined) out[k] = s.props[k];
+    return out;
+  };
+  const made = [];
+  const drop = new Set();
+  for (const [, list] of kids) {
+    const groups = new Map();
+    for (const s of list) if (s.props.type === "frame" && (kids.get(s.key) ?? []).length) (groups.get(sig(s)) ?? groups.set(sig(s), []).get(sig(s))).push(s);
+    for (const g of groups.values()) {
+      if (g.length < 3) continue;
+      const [first, ...rest] = g;
+      const master = subtree(first);
+      first.props = { ...first.props, reusable: true };
+      for (const s of rest) {
+        // Same structure, so the same order: node k of this copy is node k of the component.
+        const mine = subtree(s);
+        const byKey = {};
+        master.forEach((m, k) => {
+          const d = diff(m, mine[k]);
+          if (Object.keys(d).length) byKey[m.key] = d;
+        });
+        for (const d of mine) drop.add(d);
+        const own = diff(first, s);
+        s.props = { type: "ref", refKey: first.key, name: s.props.name, x: s.props.x, y: s.props.y, width: s.props.width, height: s.props.height, ...own, ...(Object.keys(byKey).length ? { descendantsByKey: byKey } : {}) };
+      }
+      made.push({ name: first.props.name, count: g.length });
+    }
+  }
+  for (let i = specs.length - 1; i >= 0; i--) if (drop.has(specs[i])) specs.splice(i, 1);
+  specs.components = made;
   return specs;
 }
 
@@ -355,7 +404,7 @@ export function snippets({ screen, specs, batch = 200, key = `__penImport_${Date
   for (let i = 0; i < specs.length; i += batch) {
     const part = specs.slice(i, i + batch).map((s) => [s.key, s.parent, s.props, s.fallback ?? null]);
     out.push(
-      `const M = ${G};\nif (!M) throw new Error("the import's state was lost (the editor restarted between batches); delete the partial frame and import again");\nlet FB = 0;\nfor (const [key, parent, props, fallback] of ${JSON.stringify(part)}) {\n  try { M[key] = Insert(parent ? M[parent] : M.root, props); }\n  catch (e) { if (!fallback) throw e; M[key] = Insert(parent ? M[parent] : M.root, fallback); FB++; }\n}\nPrint("DONE", ${Math.min(i + batch, specs.length)}, FB);`,
+      `const M = ${G};\nif (!M) throw new Error("the import's state was lost (the editor restarted between batches); delete the partial frame and import again");\nlet FB = 0;\nfor (const [key, parent, props, fallback] of ${JSON.stringify(part)}) {\n  if (props.refKey) { props.ref = M[props.refKey]; delete props.refKey; }\n  if (props.descendantsByKey) { props.descendants = Object.fromEntries(Object.entries(props.descendantsByKey).map(([k, v]) => [M[k], v])); delete props.descendantsByKey; }\n  try { M[key] = Insert(parent ? M[parent] : M.root, props); }\n  catch (e) { if (!fallback) throw e; M[key] = Insert(parent ? M[parent] : M.root, fallback); FB++; }\n}\nPrint("DONE", ${Math.min(i + batch, specs.length)}, FB);`,
     );
   }
   out.push(`Print("KEYS", JSON.stringify(Object.fromEntries(Object.entries(${G}).filter(([k]) => k !== "root"))));\ndelete ${G};\nPrint("CLEAN", 1);`);

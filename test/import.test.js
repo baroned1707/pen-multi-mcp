@@ -265,3 +265,17 @@ test("import_ui lays grids and wrapping rows out as rows of auto layout, and kee
   const v = await call(client, "verify", { filePath: file, target: id, source: src, crops: 0 });
   assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
 });
+
+test("import_ui with components: repeated cards become one component and instances with their texts, and still MATCH", async () => {
+  const card = (t, p) => `<div class="order-card" style="width:358px;height:64px;margin:0 0 12px;background:#F3F4F6;border-radius:12px;display:flex;flex-direction:column;justify-content:center;padding:0 16px;box-sizing:border-box"><span style="font-size:16px;font-weight:700">${t}</span><span style="font-size:13px;color:#6B7280">${p}</span></div>`;
+  fs.writeFileSync(path.join(dir, "cards.html"), `<body style="margin:0;padding:16px;font-family:Arial;background:#fff">${card("Order #1", "$12.00")}${card("Order #2", "$30.50")}${card("Order #3", "$7.25")}</body>`);
+  const src = { kind: "web", url: `file://${path.join(dir, "cards.html")}` };
+  const res = text(await call(client, "import_ui", { filePath: file, source: src, name: "Cards", components: true }));
+  assert.match(res, /Components made: Order card \(2 instances\)/, res);
+  const id = /"Cards" \((\S+)\)/.exec(res)[1];
+  const nodes = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.reusable || n.type === "ref" ? [n.type, !!n.reusable, Object.values(n.descendants ?? {}).map((d) => d.content)] : undefined).filter(Boolean)))` })))[1]);
+  assert.deepEqual(nodes.map((n) => n[1]), [true, false, false]);
+  assert.deepEqual(nodes.slice(1).map((n) => n[2]), [["Order #2", "$30.50"], ["Order #3", "$7.25"]]);
+  const v = await call(client, "verify", { filePath: file, target: id, source: src, crops: 0 });
+  assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
+});

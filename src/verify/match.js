@@ -89,9 +89,17 @@ export function match(design, ui) {
   }
   for (const { nodes, els } of groups.values()) {
     els.sort(readingOrder);
-    nodes.forEach((node, k) => {
-      if (els[k] && !pairs.has(node.id)) take(node, els[k], "marker");
-    });
+    if (nodes.length === els.length) {
+      // Repeated rows: the k-th design row is the k-th row on screen.
+      nodes.forEach((node, k) => {
+        if (!pairs.has(node.id)) take(node, els[k], "marker");
+      });
+      continue;
+    }
+    // A generic marker ("Icon") on more or fewer elements than design nodes: nearest pairs first.
+    const cand = nodes.flatMap((node) => els.map((el) => ({ node, el, d: dist(node.box, el.box) }))).sort((a, b) => a.d - b.d);
+    const usedEl = new Set();
+    for (const c of cand) if (!pairs.has(c.node.id) && !usedEl.has(c.el.i)) (take(c.node, c.el, "marker"), usedEl.add(c.el.i));
   }
 
   // 2. Equal text, closest pairs first.

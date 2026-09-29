@@ -36,7 +36,9 @@ function collect(limit) {
   };
   // What a person would call an element, for import_ui's layer names: the React component whose
   // root it is (from its fiber), its aria-label, a hand-written id, or a class that reads as a name.
-  const UTILITY = /^(p|m|px|py|pt|pb|pl|pr|mx|my|mt|mb|ml|mr|w|h|min|max|gap|text|font|bg|border|rounded|flex|grid|items|justify|content|self|col|row|space|leading|tracking|shadow|opacity|z|top|left|right|bottom|inset|overflow|block|inline|hidden|absolute|relative|fixed|sticky|order|basis|grow|shrink|transition|duration|ease|cursor|select|pointer|sr|not|is|has|js)(-|$)/;
+  // Utility classes (Tailwind and the like): a known prefix followed by a value ("mt-4", "text-sm",
+  // "items-center"), or a bare utility word. "order-card" or "price-row" read as names.
+  const UTILITY = /^(p|m|px|py|pt|pb|pl|pr|mx|my|mt|mb|ml|mr|w|h|size|min|max|gap|text|font|bg|border|rounded|items|justify|content|self|place|col|row|space|leading|tracking|shadow|opacity|z|top|left|right|bottom|inset|overflow|order|basis|grow|shrink|transition|duration|ease|cursor|select|pointer|sr|flex|grid|aspect|object|ring|outline|divide|fill|stroke|translate|scale|rotate)-(\d|\[|x$|y$|px$|xs|sm|md|lg|xl|\dxl|full|auto|screen|fit|min|max|center|start|end|between|around|evenly|stretch|baseline|none|hidden|visible|scroll|clip|bold|semibold|medium|light|normal|thin|extrabold|black|white|transparent|current|inherit|only|not|wrap|nowrap|reverse|col|row|first|last|left|right|top|bottom|inner|solid|dashed|dotted|pointer|default|nowrap)|^(flex|grid|block|inline|hidden|relative|absolute|fixed|sticky|static|container|truncate|italic|underline|uppercase|lowercase|capitalize|shadow|rounded|border|transition|contents|sr-only|visible|invisible)$|^(bg|text|border|fill|stroke|ring|from|to|via|shadow|outline|divide|decoration|accent|caret|placeholder)-[a-z]+-\d{2,3}$|[:/]/;
   const nameHint = (el) => {
     const out = {};
     const fiberKey = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
