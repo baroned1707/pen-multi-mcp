@@ -25,7 +25,7 @@ try {
       continue;
     }
     const stats = JSON.parse(/S (.*)/.exec(text(await call(c, "execute", { filePath: ws.pen, input: `const all = Get(${JSON.stringify(id)}, (n) => ({ type: n.type, name: n.name, layout: n.layout, fill: n.fill, reusable: n.reusable }));
-Print("S", JSON.stringify({ nodes: all.length, icons: all.filter((n) => n.type === "icon").length, crops: all.filter((n) => n.fill && n.fill.type === "image").length, selectorNames: all.filter((n) => /nth-of-type|^(div|span|a|li|section)$|[>.#]/.test(n.name ?? "")).length, auto: all.filter((n) => n.type === "frame" && (n.layout === "vertical" || n.layout === "horizontal")).length, instances: all.filter((n) => n.type === "ref").length }));` })))[1]);
+Print("S", JSON.stringify({ nodes: all.length, icons: all.filter((n) => n.type === "icon").length, crops: all.filter((n) => n.fill && n.fill.type === "image").length, selectorNames: all.filter((n) => /nth-of-type|^(div|span|a|li|section)$|[>.#]/.test(n.name ?? "")).length, auto: all.filter((n) => n.type === "frame" && n.layout !== "none").length, instances: all.filter((n) => n.type === "ref").length }));` })))[1]);
     const v = text(await call(c, "verify", { filePath: ws.pen, target: id, source: { kind: "web", url }, crops: 0 }));
     rows.push({ name, ...stats, match: /Verdict: MATCH/.test(v), verdict: /Verdict: [A-Z]+[^·]*/.exec(v)?.[0] });
     console.log(JSON.stringify(rows.at(-1)));

@@ -306,17 +306,22 @@ function collect(limit) {
         borderColor: bw > 0 ? rgb(cs.borderTopColor) : undefined,
         opacity: Number(cs.opacity),
         absolute: cs.position === "absolute" || undefined,
-        // Flexbox, for import_ui's auto layout: padding includes the border (children start inside both).
+        // Flexbox and grid, for import_ui's auto layout: padding includes the border (children start
+        // inside both). A grid is laid out as rows by import_ui, with its row and column gaps.
         layout: /flex$/.test(cs.display)
           ? {
               dir: cs.flexDirection,
               gap: (cs.flexDirection.startsWith("column") ? num(cs.rowGap) : num(cs.columnGap)) || 0,
+              rowGap: num(cs.rowGap) || 0,
+              colGap: num(cs.columnGap) || 0,
               padding: ["Top", "Right", "Bottom", "Left"].map((side) => (num(cs[`padding${side}`]) || 0) + (num(cs[`border${side}Width`]) || 0)),
               align: cs.alignItems,
               justify: cs.justifyContent,
               wrap: cs.flexWrap !== "nowrap" || undefined,
             }
-          : undefined,
+          : /grid$/.test(cs.display)
+            ? { dir: "grid", rowGap: num(cs.rowGap) || 0, colGap: num(cs.columnGap) || 0, padding: ["Top", "Right", "Bottom", "Left"].map((side) => (num(cs[`padding${side}`]) || 0) + (num(cs[`border${side}Width`]) || 0)), align: "start", justify: "start" }
+            : undefined,
       };
       index.set(el, o.i);
       out.push(o);

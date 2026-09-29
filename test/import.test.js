@@ -244,3 +244,24 @@ test("a marker that only shares a component's name is not an instance unless its
   const res = text(await call(client, "import_ui", { filePath: file, source: { kind: "web", url: `file://${path.join(dir, "rows.html")}` }, name: "Rows" }));
   assert.match(res, /0 component instances/, "C/Pill has one text, this element shows three");
 });
+
+test("import_ui lays grids and wrapping rows out as rows of auto layout, and keeps the round trip a MATCH", async () => {
+  const cell = (t) => `<div style="height:40px;background:#E5E7EB;border-radius:8px;font-size:14px;padding:8px">${t}</div>`;
+  fs.writeFileSync(
+    path.join(dir, "grid.html"),
+    `<body style="margin:0;font-family:Arial;background:#fff">
+<div style="display:grid;grid-template-columns:repeat(3,100px);gap:12px 8px;padding:16px">${["A", "B", "C", "D", "E", "F"].map(cell).join("")}</div>
+<div style="display:flex;flex-wrap:wrap;gap:10px;padding:16px;width:260px">${["one", "two", "three", "four", "five"].map((t) => `<span style="display:inline-block;width:70px;height:28px;background:#DBEAFE;font-size:12px">${t}</span>`).join("")}</div>
+<div style="display:grid;grid-template-columns:1fr;row-gap:6px;padding:16px">${["x", "y", "z"].map(cell).join("")}</div>
+</body>`,
+  );
+  const src = { kind: "web", url: `file://${path.join(dir, "grid.html")}` };
+  const res = text(await call(client, "import_ui", { filePath: file, source: src, name: "Grid" }));
+  const id = /"Grid" \((\S+)\)/.exec(res)[1];
+  const frames = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "frame" && n.layout !== "none" ? [n.name, n.layout ?? "horizontal", n.gap] : undefined).filter(Boolean)))` })))[1]); // horizontal is a frame's default layout
+  assert.ok(frames.filter(([n, l, g]) => /^Row \d/.test(n) && l === "horizontal" && g === 8).length >= 2, `grid rows with the column gap: ${JSON.stringify(frames)}`);
+  assert.ok(frames.some(([, l, g]) => l === "vertical" && g === 12), "the grid: rows 12 apart");
+  assert.ok(frames.some(([, l, g]) => l === "vertical" && g === 6), "the one-column grid");
+  const v = await call(client, "verify", { filePath: file, target: id, source: src, crops: 0 });
+  assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
+});
