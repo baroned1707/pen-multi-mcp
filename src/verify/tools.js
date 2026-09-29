@@ -345,21 +345,25 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       } else if (prior) {
         const designDiff = factsDiff(prior.nodes, current.nodes, "design");
         const codeDiff = factsDiff(prior.nodes, current.nodes, "ui");
-        const touched = (x) => [...x.added, ...x.removed, ...x.changed.map((c) => c.address)];
-        const dz = touched(designDiff), cz = touched(codeDiff);
-        // The frame's own fill counts as a design change, but tags no finding (every address is under the frame).
-        const frameChange = frameDiff(prior.frame, current.frame);
-        designDiff.changed.unshift(...frameChange);
         const hits = (list, a) => list.some((x) => a === x || a.startsWith(`${x}/`) || x.startsWith(`${a}/`));
+        const touched = (x) => [...x.added, ...x.removed, ...x.changed.map((c) => c.address)];
+        // Edits on purpose; moves and resizes are how a layout change elsewhere shows up (a larger
+        // gap shifts everything below it).
+        const intended = (x) => [...x.added, ...x.removed, ...x.changed.filter((c) => c.prop !== "box").map((c) => c.address)];
+        const dz = touched(designDiff), cz = touched(codeDiff), di = intended(designDiff), ci = intended(codeDiff);
+        // A finding is tagged with the side that edited it; with the side that only moved it when
+        // neither edited it.
         for (const f of result.findings) {
           if (!f.address) continue;
-          const inD = hits(dz, f.address), inC = hits(cz, f.address);
+          let inD = hits(di, f.address), inC = hits(ci, f.address);
+          if (!inD && !inC) (inD = hits(dz, f.address)), (inC = hits(cz, f.address));
           f.since = inD && inC ? "both" : inD ? "design" : inC ? "code" : undefined;
         }
-        // A conflict is both sides editing the same node on purpose. Moves and resizes are how a
-        // layout change elsewhere shows up (a larger gap shifts everything below it), not edits.
-        const intended = (x) => [...x.added, ...x.removed, ...x.changed.filter((c) => c.prop !== "box").map((c) => c.address)];
-        const overlap = intended(designDiff).some((a) => hits(intended(codeDiff), a));
+        // A conflict is both sides editing the same node on purpose.
+        const overlap = di.some((a) => hits(ci, a));
+        // The frame's own fill is a design change, but is under no finding and overlaps nothing.
+        const frameChange = frameDiff(prior.frame, current.frame);
+        designDiff.changed.unshift(...frameChange);
         sync = { state: syncState({ record: prior, designChanged: dz.length + frameChange.length > 0, codeChanged: cz.length > 0, overlap }), recordedAt: prior.verifiedAt, design: diffText(designDiff), code: diffText(codeDiff) };
       }
       fs.writeFileSync(
