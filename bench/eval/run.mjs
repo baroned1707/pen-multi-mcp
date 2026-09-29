@@ -5,6 +5,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { parseStream, score } from "./behavior.mjs";
 import { check, workspace } from "./lib.mjs";
 import { TASKS } from "./tasks.mjs";
 
@@ -32,13 +34,14 @@ for (const server of servers) {
       const w = await workspace(task, servers[0]);
       const mcp = path.join(w.dir, "mcp.json");
       fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { "pen-multi": { command: process.execPath, args: [server], env: { PEN_MULTI_APP: "0", PEN_MULTI_HOME: path.join(w.dir, "home-agent") } } } }));
-      const r = spawnSync("claude", ["-p", TASKS[task].prompt(w), "--mcp-config", mcp, "--strict-mcp-config", "--output-format", "json", "--permission-mode", "bypassPermissions"], { cwd: w.dir, encoding: "utf8", timeout: 20 * 60_000, maxBuffer: 64 << 20 });
-      let out = {};
-      try {
-        out = JSON.parse(r.stdout);
-      } catch {}
+      const snap = () => ({ page: fs.readFileSync(w.page, "utf8"), pen: createHash("sha1").update(fs.readFileSync(w.pen)).digest("hex") });
+      const before = snap();
+      const r = spawnSync("claude", ["-p", TASKS[task].prompt(w), "--mcp-config", mcp, "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions"], { cwd: w.dir, encoding: "utf8", timeout: 20 * 60_000, maxBuffer: 256 << 20 });
+      const stream = parseStream(r.stdout);
+      const out = stream.result ?? {};
+      const behavior = score(TASKS[task], stream, { before, after: snap(), page: path.basename(w.page) });
       const verdict = await check(w, servers[0]); // one judge for every side
-      const row = { server, task, i, match: verdict.match, verdict: verdict.summary, turns: out.num_turns, tokens: (out.usage?.input_tokens ?? 0) + (out.usage?.output_tokens ?? 0) + (out.usage?.cache_read_input_tokens ?? 0), costUsd: out.total_cost_usd, error: r.status ? (r.stderr || "").slice(0, 300) : undefined };
+      const row = { server, task, i, match: verdict.match, verdict: verdict.summary, turns: out.num_turns, tokens: (out.usage?.input_tokens ?? 0) + (out.usage?.output_tokens ?? 0) + (out.usage?.cache_read_input_tokens ?? 0), costUsd: out.total_cost_usd, behavior, error: r.status ? (r.stderr || "").slice(0, 300) : undefined };
       results.push(row);
       console.log(JSON.stringify(row));
       fs.rmSync(w.dir, { recursive: true, force: true });

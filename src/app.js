@@ -306,7 +306,7 @@ export class AppBridge {
   async #client() {
     if (this.client) return this.client;
     this.connecting ??= (async () => {
-      const client = new Client({ name: "pen-multi", version: "1.3.0" });
+      const client = new Client({ name: "pen-multi", version: "1.4.0" });
       const transport = new StdioClientTransport({
         command: appConfig.server,
         args: ["--app", "desktop", "--agent", appConfig.agent, "--enable_spawn_agents"],

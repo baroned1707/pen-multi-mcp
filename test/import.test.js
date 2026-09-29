@@ -60,16 +60,17 @@ test("verify finds the page through .pen-multi.json routes; sync_status reports 
   assert.match(text(viaRoute), /vs web file:\/\/.*orders\.html/);
   await call(client, "save", { filePath: file });
   let status = text(await call(client, "sync_status", { filePath: file }));
-  assert.match(status, /Orders \| match \| 390 \| – \| orders\.html \| 0 high, 0 medium/);
+  // The MATCH wrote a sync record (design-sync/), so the frame is in sync.
+  assert.match(status, /Orders \| in-sync \| 390 \| – \| orders\.html \| 0 high, 0 medium/);
 
   // A second screen never verified, then a design change after the last verify.
   await call(client, "execute", { filePath: file, input: `Insert(document, { type: "frame", name: "Settings", x: 3000, y: 0, width: 390, height: 844, fill: "#FFFFFF" })` });
   await call(client, "execute", { filePath: file, input: `Update(${JSON.stringify(frameId)}, { fill: "#F5F5F5" })` });
   await call(client, "save", { filePath: file });
   status = text(await call(client, "sync_status", { filePath: file }));
-  assert.match(status, /Orders \| match \(stale\)/);
+  assert.match(status, /Orders \| design-changed \| .* \| design: ~ Orders fill "#FAFAFA" → "#F5F5F5"/);
   assert.match(status, /Settings \| never/);
-  assert.match(status, /## Verify next\n- verify\(\{ target: "[^"]+", source: \{ kind: "web" \} \}\) {2}\/\/ Orders: match \(stale\)/);
+  assert.match(status, /## Next\n- verify\(\{ target: "[^"]+", source: \{ kind: "web" \} \}\) {2}\/\/ Orders: design-changed/);
 
   const noRoute = await call(client, "verify", { filePath: file, target: "Settings", source: { kind: "web" } });
   assert.equal(noRoute.isError, true);

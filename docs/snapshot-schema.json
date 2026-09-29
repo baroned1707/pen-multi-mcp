@@ -1,0 +1,158 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "pen-multi://snapshot-schema",
+ "title": "pen-multi UI snapshot v1",
+ "type": "object",
+ "required": [
+  "version",
+  "viewport",
+  "elements"
+ ],
+ "properties": {
+  "version": {
+   "const": 1
+  },
+  "platform": {
+   "type": "string",
+   "description": "Free text: web, android, ios, flutter, desktop…"
+  },
+  "viewport": {
+   "type": "object",
+   "required": [
+    "w",
+    "h"
+   ],
+   "properties": {
+    "w": {
+     "type": "number",
+     "exclusiveMinimum": 0
+    },
+    "h": {
+     "type": "number",
+     "exclusiveMinimum": 0
+    },
+    "scale": {
+     "type": "number",
+     "description": "Screenshot pixels per unit (default 1)."
+    }
+   }
+  },
+  "screenshot": {
+   "type": "string",
+   "description": "PNG path of what the elements were read from; pixel regions and close-ups need it."
+  },
+  "fields": {
+   "type": "array",
+   "items": {
+    "enum": [
+     "text",
+     "bg",
+     "fg",
+     "fontSize",
+     "fontWeight",
+     "lineHeight",
+     "radius",
+     "border"
+    ]
+   },
+   "description": "The element properties this source provides; the others are not compared."
+  },
+  "pageBg": {
+   "type": "string",
+   "description": "Background color behind everything (CSS color)."
+  },
+  "elements": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "box"
+    ],
+    "properties": {
+     "i": {
+      "type": "integer",
+      "description": "Index (default: position in the array)."
+     },
+     "parent": {
+      "type": "integer",
+      "description": "Index of the enclosing element."
+     },
+     "box": {
+      "type": "object",
+      "required": [
+       "x",
+       "y",
+       "w",
+       "h"
+      ],
+      "properties": {
+       "x": {
+        "type": "number"
+       },
+       "y": {
+        "type": "number"
+       },
+       "w": {
+        "type": "number",
+        "minimum": 0
+       },
+       "h": {
+        "type": "number",
+        "minimum": 0
+       }
+      },
+      "description": "In the design's units (logical px / dp / pt), from the top-left of the screen."
+     },
+     "text": {
+      "type": "string",
+      "description": "Text shown by the element itself."
+     },
+     "marker": {
+      "type": "string",
+      "description": "The design node it implements: \"pen:<id or address>\" or the bare value."
+     },
+     "bg": {
+      "type": "string"
+     },
+     "fg": {
+      "type": "string",
+      "description": "Text or icon color."
+     },
+     "fontSize": {
+      "type": "number"
+     },
+     "fontWeight": {
+      "type": "number"
+     },
+     "fontFamily": {
+      "type": "string"
+     },
+     "lineHeight": {
+      "type": "number",
+      "description": "In units, not a ratio."
+     },
+     "radius": {
+      "type": "number"
+     },
+     "borderWidth": {
+      "type": "number"
+     },
+     "borderColor": {
+      "type": "string"
+     },
+     "icon": {
+      "type": "boolean"
+     },
+     "fixed": {
+      "type": "boolean",
+      "description": "Pinned to the viewport (a tab bar)."
+     },
+     "layout": {
+      "type": "object",
+      "description": "Flex-like layout for import_ui: { dir, gap, padding: [t, r, b, l], align, justify, wrap }."
+     }
+    }
+   }
+  }
+ }
+}

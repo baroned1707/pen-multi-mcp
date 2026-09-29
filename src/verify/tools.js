@@ -1,18 +1,30 @@
 // capture, verify and contact_sheet: compare a design screen with the running UI on any platform.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { buildModel } from "../design/model.js";
 import { ReadError, readSubtree } from "../design/read.js";
 import { captureNative } from "./adapters/native.js";
 import { captureProbe } from "./adapters/probe.js";
 import { captureWeb } from "./adapters/web.js";
+import { SourceError, captureCommand, captureFile } from "./adapters/command.js";
 import { designNodes } from "./design.js";
 import { pngBuffer, readPng, resize, writePng } from "./image.js";
 import { verifyScreen } from "./pipeline.js";
 import { contactSheet, findingCrops, renderReport, sheetRow } from "./report.js";
 import { pointFindingsAtCode } from "./code.js";
 import { USAGE_SNIPPET, designEdits, editLines, propertyNumbers } from "./reverse.js";
+import { nextStep } from "../guide.js";
+import { buildRecord, diffText, factsDiff, frameDiff, readRecord, recordPath, syncState, writeRecord } from "../sync/index.js";
+import { primaryFill } from "../design/inspect.js";
+
+/** A frame's own background as a color string, when it is one. */
+const frameFill = (root) => {
+  const p = primaryFill(root.fill, root.resolved?.fill);
+  return p?.kind === "color" ? p.resolved ?? p.raw : undefined;
+};
+export { frameFill };
 import { projectMapping } from "../mapping/index.js";
 
 const OUT_DIR = "design-verify";
@@ -45,6 +57,7 @@ const describeSource = (src) =>
   (src.mocks?.length ? ` with ${src.mocks.length} mock${src.mocks.length > 1 ? "s" : ""}` : "");
 
 export function registerVerifyTools({ tool, z, route, design, withMachineLock, optionalFilePath, ok, conventions, saver, hooks = {} }) {
+  const repeats = new Map(); // file|frame -> { sig, count }: the same findings verify after verify
   // The page a screen is served at: .pen-multi.json { baseUrl, routes: { "<screen name, code or frame name>": "/path" } }.
   /**
    * .pen-multi.json `states`: how to show a frame's state ({ route?, steps?, mocks?, deepLink? }),
@@ -93,7 +106,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
   }
   const source = z
     .object({
-      kind: z.enum(["web", "probe", "native", "image"]).describe("web: a URL in headless Chromium; probe: a React Native/Expo dev build running <PenProbe>; native: any Android/iOS app via uiautomator/maestro; image: a screenshot file."),
+      kind: z.enum(["web", "probe", "native", "image", "file", "command"]).describe("web: a URL in headless Chromium; probe: a React Native/Expo dev build running <PenProbe>; native: any Android/iOS app via uiautomator/maestro; image: a screenshot file; file: a snapshot JSON written by any tool (schema: resource pen-multi://snapshot-schema); command: a trusted project command that writes one (any platform: Flutter, desktop, …)."),
       url: z.string().optional().describe("web: the page to load (the agent starts the dev server). verify can omit it when .pen-multi.json maps the screen to a route."),
       steps: z.array(z.record(z.string(), z.any())).optional().describe('web: actions before capturing, e.g. [{ "click": "text=Login" }, { "fill": ["#email", "a@b.c"] }, { "waitFor": ".list" }, { "wait": 500 }, { "press": "Enter" }, { "eval": "..." }].'),
       fullPage: z.boolean().optional().describe("web: capture the whole scrolling page (default true)."),
@@ -117,12 +130,30 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       deepLink: z.string().optional().describe("probe/native: open this URL in the app first."),
       settleMs: z.number().int().min(0).max(60_000).optional().describe("probe/native: wait after the deep link (default 2000)."),
       timeoutMs: z.number().int().min(1000).max(120_000).optional().describe("probe: how long to wait for the app's snapshot (default 20000)."),
-      path: z.string().optional().describe("image: PNG screenshot path."),
+      path: z.string().optional().describe("image: PNG screenshot path; file: snapshot JSON path."),
+      run: z.string().optional().describe('command: the shell command. It gets PEN_SNAPSHOT_OUT, PEN_SCREENSHOT_OUT, PEN_WIDTH, PEN_HEIGHT, PEN_THEME, PEN_TARGET, PEN_STATE and writes the snapshot there. Runs only if the user trusted it for this project (the error says how).'),
+      cwd: z.string().optional().describe("command: folder to run it in (default: the working directory)."),
       width: z.number().positive().optional().describe("image: the screenshot's logical width (e.g. 390 for a 1170 px iPhone shot)."),
     })
     .describe("Where the implemented UI comes from.");
 
   /** Captures a source into design-verify/captures/<name>.{json,png}. */
+  // Source errors (a bad snapshot, an untrusted command) are the agent's to fix, not crashes.
+  const wrapSource = (fn) => {
+    try {
+      return fn();
+    } catch (err) {
+      throw err instanceof SourceError ? new ReadError(err.message) : err;
+    }
+  };
+  const wrapSourceAsync = async (fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      throw err instanceof SourceError ? new ReadError(err.message) : err;
+    }
+  };
+
   async function capture(src, { width, height, colorScheme, name, savePath }) {
     const base = savePath ? path.resolve(process.cwd(), savePath).replace(/\.(json|png)$/i, "") : path.join(process.cwd(), OUT_DIR, "captures", name);
     // At a path the caller chose, only a previous capture may be replaced, never an unrelated JSON
@@ -144,6 +175,15 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
     } else if (src.kind === "native") {
       // One capture per device at a time: dumps and screenshots of two agents must not interleave.
       ({ snapshot } = await withMachineLock(`device:${src.platform}:${src.device ?? "default"}`, () => captureNative({ ...src, screenshotPath })));
+    } else if (src.kind === "file") {
+      if (!src.path) throw new ReadError("source.path is required for kind file");
+      snapshot = wrapSource(() => captureFile(src)).snapshot;
+      if (snapshot.screenshot && fs.existsSync(snapshot.screenshot)) fs.copyFileSync(snapshot.screenshot, screenshotPath), (snapshot.screenshot = screenshotPath);
+    } else if (src.kind === "command") {
+      if (!src.run) throw new ReadError("source.run is required for kind command");
+      const home = process.env.PEN_MULTI_HOME ?? path.join(os.homedir(), ".pen-multi");
+      snapshot = (await wrapSourceAsync(() => captureCommand(src, { home, width, height, theme: colorScheme, target: name, state: src.state, out: `${base}-command` }))).snapshot;
+      if (snapshot.screenshot && fs.existsSync(snapshot.screenshot) && snapshot.screenshot !== screenshotPath) fs.copyFileSync(snapshot.screenshot, screenshotPath), (snapshot.screenshot = screenshotPath);
     } else {
       if (!src.path) throw new ReadError("source.path is required for kind image");
       const file = path.resolve(process.cwd(), src.path);
@@ -159,7 +199,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
 
   tool(
     "capture",
-    "Capture the implemented UI as data: every visible element's box, text, colors, typography and pen marker, plus a screenshot. Sources: a web URL (headless, no window), a React Native/Expo dev build with <PenProbe>, any Android/iOS app via uiautomator/maestro, or a screenshot file. verify captures by itself; use capture to keep a snapshot or to look at what the UI renders.",
+    "Use when you need what the running UI renders (elements and screenshot) without comparing it. Not for checking against the design (verify). Capture the implemented UI as data: every visible element's box, text, colors, typography and pen marker, plus a screenshot. Sources: a web URL (headless, no window), a React Native/Expo dev build with <PenProbe>, any Android/iOS app via uiautomator/maestro, or a screenshot file. verify captures by itself; use capture to keep a snapshot or to look at what the UI renders.",
     {
       source,
       width: z.number().positive().optional().describe("web: viewport width (default 390)."),
@@ -218,7 +258,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
 
   tool(
     "verify",
-    `Check an implementation against its design and get the differences as text: design nodes missing from the UI, UI text that is not in the design (old UI left behind), section order, and size, position, color, typography, radius and border differences beyond tolerance, plus pixel regions named after the design nodes there. Works for web (URL, headless), React Native/Expo (pen-probe), native Android/iOS (uiautomator/maestro) and plain screenshots. A port is done when the verdict is MATCH for every implemented screen × width × theme. Writes the full JSON report and a contact sheet PNG to ${OUT_DIR}/.`,
+    `Use when a screen is implemented (or changed) in code, to know whether it matches the design — and with direction "code-to-design" when the design should follow the code. Not for looking at a page (capture). Check an implementation against its design and get the differences as text: design nodes missing from the UI, UI text that is not in the design (old UI left behind), section order, and size, position, color, typography, radius and border differences beyond tolerance, plus pixel regions named after the design nodes there. Works for web (URL, headless), React Native/Expo (pen-probe), native Android/iOS (uiautomator/maestro) and plain screenshots. A port is done when the verdict is MATCH for every implemented screen × width × theme. Writes the full JSON report and a contact sheet PNG to ${OUT_DIR}/.`,
     {
       filePath: optionalFilePath,
       target: z.string().describe("Screen name, code or node id, as for inspect."),
@@ -266,7 +306,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       }
       const designImg = readPng(designPng);
       const uiImg = snapshot.screenshot && fs.existsSync(snapshot.screenshot) ? readPng(snapshot.screenshot) : null;
-      const result = verifyScreen({ design: d, snapshot, designImg, uiImg, tolerance });
+      const { pairs, ...result } = verifyScreen({ design: d, snapshot, designImg, uiImg, tolerance });
       // Point findings at the code (markers) and name the design tokens they concern.
       const mapping = projectMapping({ penFile: target.file, conv: conventions(target.file), variables: model.variables, themes: model.themes });
       const where = pointFindingsAtCode(result.findings, { model, d, snapshot, mapping });
@@ -290,6 +330,32 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       try {
         previousHash = JSON.parse(fs.readFileSync(files.report, "utf8")).pen?.sha1 ?? null;
       } catch {}
+      // Sync record: written on MATCH; on DIFFERS, what changed on each side since the last one.
+      const frameInfo = { id, name: model.root.name ?? id, width: d.frame.w, theme: frameTheme ?? rootTheme ?? null, fill: frameFill(model.root) };
+      const syncFile = recordPath(target.file, frameInfo);
+      const prior = readRecord(syncFile);
+      const current = buildRecord({ penFile: target.file, penSha: penHash, frame: frameInfo, design: d, pairs, fields: snapshot.fields ?? [], source: snapshot.request ?? null });
+      let sync = null;
+      if (result.summary.verdict === "match") {
+        writeRecord(syncFile, current);
+        sync = { recorded: path.relative(process.cwd(), syncFile) };
+      } else if (prior) {
+        const designDiff = factsDiff(prior.nodes, current.nodes, "design");
+        const codeDiff = factsDiff(prior.nodes, current.nodes, "ui");
+        const touched = (x) => [...x.added, ...x.removed, ...x.changed.map((c) => c.address)];
+        const dz = touched(designDiff), cz = touched(codeDiff);
+        // The frame's own fill counts as a design change, but tags no finding (every address is under the frame).
+        const frameChange = frameDiff(prior.frame, current.frame);
+        designDiff.changed.unshift(...frameChange);
+        const hits = (list, a) => list.some((x) => a === x || a.startsWith(`${x}/`) || x.startsWith(`${a}/`));
+        for (const f of result.findings) {
+          if (!f.address) continue;
+          const inD = hits(dz, f.address), inC = hits(cz, f.address);
+          f.since = inD && inC ? "both" : inD ? "design" : inC ? "code" : undefined;
+        }
+        const overlap = dz.some((a) => hits(cz, a));
+        sync = { state: syncState({ record: prior, designChanged: dz.length + frameChange.length > 0, codeChanged: cz.length > 0, overlap }), recordedAt: prior.verifiedAt, design: diffText(designDiff), code: diffText(codeDiff) };
+      }
       fs.writeFileSync(
         files.report,
         JSON.stringify(
@@ -300,6 +366,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
             source: snapshot.request ?? null,
             uiWidth: snapshot.viewport?.w,
             ...result,
+            sync,
             files,
             meta,
           },
@@ -314,8 +381,21 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         const elements = (snapshot.elements ?? []).map((e) => ({ ...e, box: e.box && { x: e.box.x * s, y: e.box.y * s, w: e.box.w * s, h: e.box.h * s } }));
         const usage = await run(USAGE_SNIPPET);
         const edits = designEdits(result.findings, { model, theme: frameTheme ?? rootTheme ?? null, elements, numbers: propertyNumbers(model.variables, usage.text) });
-        reportLines = [...reportLines.filter((l) => !l.startsWith("Fix the high findings first")), ...editLines(edits, { designChanged: Boolean(previousHash && penHash && previousHash !== penHash) })];
+        reportLines = [...reportLines, ...editLines(edits, { designChanged: Boolean(previousHash && penHash && previousHash !== penHash) })];
       }
+      // The same findings again and again: the fixes are not landing where verify looks.
+      const sig = result.findings.filter((x) => x.severity !== "low").map((x) => `${x.kind}:${x.address ?? x.uiIndex}`).sort().join("|");
+      const seen = repeats.get(`${target.file}|${id}`);
+      const count = seen && seen.sig === sig && sig ? seen.count + 1 : 1;
+      repeats.set(`${target.file}|${id}`, { sig, count });
+      if (count >= 3 && result.summary.verdict !== "match") reportLines.push("", `Note: verify returned the same findings ${count} times in a row. Check that the page shows your change (route, state, dev server reloaded, the right file), or change approach.`);
+      const others = picked?.row ? Object.values(picked.row.cells).flat().map((c) => c.id).filter((x) => x !== id) : [];
+      if (sync?.recorded) reportLines.push("", `Recorded as the last match in ${sync.recorded} (commit it with the code, so every agent and machine knows where design and code stand).`);
+      if (sync?.state) {
+        reportLines.push("", `## Since the last match (${sync.recordedAt})`, `- Design: ${sync.design || "no change"}`, `- Code: ${sync.code || "no change"}`);
+      }
+      const syncNext = sync?.state && direction !== "code-to-design" && ["design-changed", "code-changed", "both-changed", "diverged"].includes(sync.state) ? sync.state : null;
+      reportLines.push("", nextStep({ state: syncNext ?? (result.summary.verdict === "match" ? "match" : "differs"), id, direction, others }));
       const res = design.wrap(target, reportLines);
       if (uiImg && crops > 0) {
         for (const { finding, image } of findingCrops({ designImg, uiImg, frame: d.frame, findings: result.findings, uiWidth: snapshot.viewport?.w, n: crops })) {
@@ -328,7 +408,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
 
   tool(
     "contact_sheet",
-    "One image comparing screens side by side, a row per verify report: the design, the implemented UI, and the UI with each finding's numbered box (missing nodes are boxed on the design). For people and for a quick look; the verify text report is the reliable signal.",
+    "Use when showing a person several verify results side by side. One image comparing screens side by side, a row per verify report: the design, the implemented UI, and the UI with each finding's numbered box (missing nodes are boxed on the design). For people and for a quick look; the verify text report is the reliable signal.",
     {
       reports: z.array(z.string()).min(1).max(40).describe("verify report JSON paths (design-verify/<screen>.json)."),
       savePath: z.string().optional().describe("PNG path (default design-verify/contact-sheet.png)."),

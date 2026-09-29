@@ -19,7 +19,8 @@ export function renderReport({ meta, summary, findings, notCompared = [], files 
     for (const f of list) {
       if (shown >= maxLines) break;
       const token = f.token ? ` Design token ${f.token.design}${f.token.code ? ` = ${f.token.code} in code` : ""}.` : "";
-      lines.push(`${f.n}. [${f.severity}] ${f.message}${token}${f.code ? ` → ${f.code}` : ""}`);
+      const since = f.since ? ` (${f.since === "both" ? "both sides changed" : `${f.since} changed`} since the last match)` : "";
+      lines.push(`${f.n}. [${f.severity}] ${f.message}${token}${f.code ? ` → ${f.code}` : ""}${since}`);
       shown++;
     }
   }
@@ -28,7 +29,6 @@ export function renderReport({ meta, summary, findings, notCompared = [], files 
   if (hints.length) lines.push("", "## Hints", ...hints.map((h) => `- ${h}`));
   const written = Object.entries(files).filter(([, v]) => v);
   if (written.length) lines.push("", "## Files", ...written.map(([k, v]) => `- ${k}: ${v}`));
-  if (summary.verdict !== "match") lines.push("", "Fix the high findings first (structure: missing, extra, order), then re-run verify with the same arguments.");
   return lines;
 }
 

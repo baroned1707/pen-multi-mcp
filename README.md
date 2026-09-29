@@ -146,7 +146,22 @@ The browser is Playwright's Chromium if installed (`npx playwright install chrom
 
 `import_ui` rebuilds a running screen (web URL, pen-probe, native device) as an editable frame in the .pen: painted boxes become frames, texts become text nodes with their font, color and alignment, images and icons become crops of the screenshot, colors equal to a document token use the token, and font sizes and radii use the one number token with that value. Elements whose marker names a design component come in as its instances, their texts as overrides. Flex containers (and blocks whose children stack with even gaps) become auto-layout frames where the engine reproduces the page within 2 px; the others stay absolute. The result says what is not on tokens yet and which repeated structures look like components. Importing a page and verifying the new frame against the same page gives MATCH.
 
-`sync_status` lists every screen × width × theme with its route, its last `verify` verdict and age, and whether the design changed since (stale), then the `verify` calls to run next.
+### Where design and code stand: sync records and `sync_status`
+
+Every `verify` MATCH records the pair in `design-sync/<frame>.json` next to the `.pen` — the design's facts, the UI's facts (texts only as hashes, so no app data enters the repo), the `.pen` hash, the code commit and the source. Commit it with the code. From then on:
+
+- `verify` on DIFFERS says what changed on each side since the last match, tags every finding *(design changed)*, *(code changed)* or *(both)*, and its `Next:` follows: update the code, update the design (`direction: "code-to-design"`), carry each side's change to the other when they changed different nodes (`diverged`), or — when the same nodes changed on both sides — ask the user which side wins.
+- `sync_status` gives every screen × width × theme one state — `in-sync`, `design-changed`, `code-changed`, `both-changed`, `match`, `differs`, `never` — with what changed (the design compared exactly; the code through the files that carry the frame's markers, changed since the recorded commit) and the next call per row, conflicts first.
+
+### Any platform: `file` and `command` sources
+
+Beyond web, pen-probe, native and screenshots, `verify`, `import_ui` and `port` take a snapshot from anything that can write one (a Flutter integration test, a desktop accessibility dump…): `source: { kind: "file", path }`, or `source: { kind: "command", run }`, which gets `PEN_SNAPSHOT_OUT`, `PEN_SCREENSHOT_OUT`, `PEN_WIDTH`, `PEN_HEIGHT`, `PEN_THEME`, `PEN_TARGET` and writes the snapshot there. The schema is the MCP resource `pen-multi://snapshot-schema` ([docs/snapshot-schema.json](docs/snapshot-schema.json)): only boxes are required, a source declares the rest in `fields`, and every file or command snapshot is validated. A command runs only once the user trusts it for the project — `node bin/pen-multi.js trust <project> "<command>"` — stored in `~/.pen-multi/trusted.json`, outside every repository (or with `PEN_MULTI_COMMANDS=1`).
+
+### `doctor`, prompts, and `Next:`
+
+- `doctor` checks a project for design ↔ code work — git repository, routes that answer, states, screen naming, code markers and component mapping, the token file, sync records not gitignored — each with its fix; it changes nothing.
+- MCP prompts `port-design`, `design-from-code` and `sync-check` list the workflows in every MCP client (`prompts/`; the `pen-port` skill is the same text).
+- inspect, verify, import_ui and sync_status end with one `Next:` line computed from the frame's state, and `Note:` lines flag what needs attention (the same findings three verifies in a row; a design changed since its last verify).
 
 Routes live in `.pen-multi.json` next to the `.pen`: `{ "baseUrl": "http://localhost:5173", "routes": { "Checkout": "/checkout" } }`. With them, `verify({ target: "Checkout", source: { kind: "web" } })` needs no URL.
 
