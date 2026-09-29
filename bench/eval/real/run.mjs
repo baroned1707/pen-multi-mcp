@@ -50,7 +50,7 @@ function codeMutation(ws, texts, r) {
 }
 
 const PROMPTS = {
-  "design-to-code": (ws, f) => `The designer updated the frame "${f.name}" (id ${f.id}) in ${ws.pen}. The design is the source of truth: update the app's code in ${ws.source} so that pen-multi verify of that frame against the running app reports MATCH. The app runs at ${ws.baseUrl} with hot reload; its routes are in .pen-multi.json. Do not edit the design.`,
+  "design-to-code": (ws, f) => `The designer updated the frame "${f.name}" (id ${f.id}) in ${ws.pen}; the changes are intentional. The design is the source of truth: update the app's code in ${ws.source} so that pen-multi verify of that frame against the running app reports MATCH. The app runs at ${ws.baseUrl} with hot reload; its routes are in .pen-multi.json. Do not edit the design.`,
   "code-to-design": (ws, f) => `The frame "${f.name}" (id ${f.id}) in ${ws.pen} no longer matches the running app (${ws.baseUrl}, routes in .pen-multi.json). The code is the source of truth: update the design with the pen-multi tools until verify reports MATCH. Do not edit the code.`,
   both: (ws, f) => `The frame "${f.name}" (id ${f.id}) in ${ws.pen} and the running app (${ws.baseUrl}, routes in .pen-multi.json) matched at the last commit. Since then both the design and the code (${ws.source}) were edited by different people. Bring them back in sync with the pen-multi tools.`,
 };
@@ -74,7 +74,7 @@ for (const server of servers) {
     for (let i = 0; i < n; i++) {
       const seed = [...`${kind}:${i}`].reduce((s, ch) => (s * 31 + ch.charCodeAt(0)) >>> 0, 7);
       const r = rng(seed);
-      const frame = base.frames[Math.floor(r() * base.frames.length)];
+      let frame = base.frames[Math.floor(r() * base.frames.length)];
       const ws = await makeWorkspace(app);
       const stop = await startApp(ws);
       const row = { server, kind, i, seed, frame: frame.name };
@@ -82,6 +82,14 @@ for (const server of servers) {
         // Setup, with this checkout's server (the recorder), before the agent starts.
         const c = await connect({ home: path.join(ws.dir, ".home-setup"), cwd: ws.dir, env: { PEN_MULTI_PREWARM: "0", PEN_MULTI_EVENTS: "0" }, server: here });
         try {
+          // The frame must match in this workspace before anything changes; else take another.
+          for (let tries = 0; ; tries++) {
+            const v = text(await call(c, "verify", { filePath: ws.pen, target: frame.id, source: { kind: "web" }, crops: 0 }));
+            if (/Verdict: MATCH/.test(v)) break;
+            if (tries >= 3) throw new Error(`setup: no matching frame (last: ${frame.name})`);
+            frame = base.frames[Math.floor(r() * base.frames.length)];
+            row.frame = frame.name;
+          }
           if (kind === "both") {
             // Record the match and commit it, as the prompt says.
             const v = text(await call(c, "verify", { filePath: ws.pen, target: frame.id, source: { kind: "web" }, crops: 0 }));
@@ -108,7 +116,12 @@ for (const server of servers) {
         const after = { pen: sha(ws.pen), code: codeDiff(ws) };
         // Judge: verify with this checkout's server, and which side moved.
         const j = await connect({ home: path.join(ws.dir, ".home-judge"), cwd: ws.dir, env: { PEN_MULTI_PREWARM: "0", PEN_MULTI_EVENTS: "0" }, server: here });
-        const verdict = text(await call(j, "verify", { filePath: ws.pen, target: frame.id, source: { kind: "web" }, crops: 0 }));
+        let verdict = text(await call(j, "verify", { filePath: ws.pen, target: frame.id, source: { kind: "web" }, crops: 0 }));
+        if (!/Verdict: MATCH/.test(verdict)) {
+          row.judgeFirst = /Verdict: .*/.exec(verdict)?.[0];
+          verdict = text(await call(j, "verify", { filePath: ws.pen, target: frame.id, source: { kind: "web" }, crops: 0 })); // once more: a flake is not a failure
+        }
+        row.findings = verdict.split("\n").filter((l) => /^\d+\. \[(high|medium)\]/.test(l)).slice(0, 8).map((l) => l.slice(0, 200));
         await j.close();
         const match = /Verdict: MATCH/.test(verdict);
         const penChanged = before.pen !== after.pen, codeChanged = before.code !== after.code;

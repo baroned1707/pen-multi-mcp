@@ -6,6 +6,9 @@ import { designNodes } from "../../../src/verify/design.js";
 import { call, text } from "../../../test/helpers.js";
 
 export const KINDS = ["text", "color", "radius", "spacing", "hide", "add", "order"];
+// Removing content reads as a mistake to a careful agent (the pilot's agent refused to delete a
+// warning's text), so "hide" is left out of tasks unless asked for.
+export const DEFAULT_KINDS = KINDS.filter((k) => k !== "hide");
 
 /** A seeded random generator (mulberry32). */
 export function rng(seed) {
@@ -73,7 +76,7 @@ export function operation(kind, c, r) {
 }
 
 /** Chooses and applies `count` mutations to a frame. Returns [{ kind, what }]. */
-export async function mutate(client, file, frameId, { seed, count = 1, kinds = KINDS } = {}) {
+export async function mutate(client, file, frameId, { seed, count = 1, kinds = DEFAULT_KINDS } = {}) {
   const r = rng(seed);
   const raw = await readSubtree(reader(client, file), frameId);
   const model = buildModel(raw);
