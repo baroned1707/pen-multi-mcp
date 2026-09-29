@@ -34,6 +34,26 @@ function collect(limit) {
     const n = parseFloat(v);
     return Number.isFinite(n) ? n : undefined;
   };
+  // What a person would call an element, for import_ui's layer names: the React component whose
+  // root it is (from its fiber), its aria-label, a hand-written id, or a class that reads as a name.
+  const UTILITY = /^(p|m|px|py|pt|pb|pl|pr|mx|my|mt|mb|ml|mr|w|h|min|max|gap|text|font|bg|border|rounded|flex|grid|items|justify|content|self|col|row|space|leading|tracking|shadow|opacity|z|top|left|right|bottom|inset|overflow|block|inline|hidden|absolute|relative|fixed|sticky|order|basis|grow|shrink|transition|duration|ease|cursor|select|pointer|sr|not|is|has|js)(-|$)/;
+  const nameHint = (el) => {
+    const out = {};
+    const fiberKey = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
+    const fiber = fiberKey && el[fiberKey];
+    const owner = fiber?.return;
+    const type = owner?.type;
+    if (typeof type === "function" && owner.child === fiber) {
+      const n = type.displayName || type.name;
+      if (n && /^[A-Z]/.test(n) && !/^(Fragment|Provider|Consumer|Suspense|StrictMode|Router|Routes|Route|Outlet|Link|NavLink)$/.test(n)) out.component = n;
+    }
+    const label = el.getAttribute("aria-label") || el.getAttribute("title");
+    if (label && label.length <= 40) out.label = label;
+    if (el.id && /^[a-z][\w-]{2,}$/i.test(el.id) && !/\d{3,}|^:r/.test(el.id)) out.id = el.id;
+    const cls = [...(el.classList ?? [])].find((c) => c.length >= 3 && /^[a-z][a-z0-9]*([-_][a-z0-9]+)*$/i.test(c) && !UTILITY.test(c));
+    if (cls) out.cls = cls;
+    return Object.keys(out).length ? out : undefined;
+  };
   // nth-of-type positions, computed once per parent (a list of thousands of siblings stays linear).
   const nth = new Map();
   const nthOf = (el) => {
@@ -260,6 +280,7 @@ function collect(limit) {
         parent,
         tag: el.tagName.toLowerCase(),
         selector: path(el),
+        nameHint: nameHint(el),
         marker: el.getAttribute("data-pen") || undefined,
         text: text || undefined,
         truncated: truncated || undefined,

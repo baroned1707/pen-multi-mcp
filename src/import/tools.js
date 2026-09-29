@@ -122,7 +122,7 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
         n.children.forEach(walk);
       };
       walk(model.root);
-      out.set(key, { id: c.id, name: c.name, texts });
+      out.set(key, { id: c.id, name: c.name, texts, byId: key === c.id });
     }
     return out;
   }

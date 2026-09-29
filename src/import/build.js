@@ -50,9 +50,16 @@ const textStyle = (el, tokens, numbers) => {
 
 // "/" separates layer addresses (verify markers), so it never goes into a name.
 export const safeName = (s) => String(s).replace(/\s*\/\s*/g, " – ");
+const words = (s) => String(s).replace(/[-_]+/g, " ").replace(/\b\w/, (c) => c.toUpperCase());
 const nameOf = (el) => {
   const marker = el.marker && String(el.marker).replace(/^.*:id\//, "").replace(/^pen:/, "");
   if (marker) return safeName(marker.split("/").pop());
+  // A text layer is named by what it says; a box by what the code calls it.
+  const h = el.nameHint ?? {};
+  if (!el.text || el.bg || el.borderWidth > 0) {
+    const named = h.component ?? h.label ?? (h.id && words(h.id)) ?? (h.cls && words(h.cls));
+    if (named) return safeName(named);
+  }
   if (el.text) return safeName(el.text.replace(/\s+/g, " ").slice(0, 32));
   const sel = String(el.selector ?? "").split(">").pop().trim();
   return safeName(sel || el.tag || "Box");
@@ -137,7 +144,13 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
   for (const el of snapshot.elements) {
     flushPending(el);
     if (insideInstance(el)) continue;
-    const comp = el.marker && components?.get(String(el.marker).replace(/^.*:id\//, "").replace(/^pen:/, ""));
+    let comp = el.marker && components?.get(String(el.marker).replace(/^.*:id\//, "").replace(/^pen:/, ""));
+    // A marker naming the component by id is proof. By name ("Row", "Card") it is only a hint:
+    // taken when the element shows as many texts as the component has, so every one is overridden.
+    if (comp && !comp.byId) {
+      const shown = snapshot.elements.filter((c) => c.text && !c.icon && c.i !== el.i && isInside(c, el.i)).length || (el.text ? 1 : 0);
+      if (shown !== comp.texts.length) comp = null;
+    }
     if (comp) {
       const { key: parent, box: pbox } = keyOf(el);
       const own = boxOf(el);

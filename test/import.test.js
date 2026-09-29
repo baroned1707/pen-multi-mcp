@@ -219,3 +219,28 @@ ${svg('<path d="M3 3h18v18H3z"/><path d="M3 21 21 3"/><circle cx="8" cy="8" r="2
   const got = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "icon" ? n.icon : undefined).filter(Boolean)))` })))[1]);
   assert.deepEqual(got, ["chevron-right", "plus", "check", "info"]);
 });
+
+test("import_ui names layers after the code: React component, aria-label, id, a name-like class — not selectors", async () => {
+  fs.writeFileSync(
+    path.join(dir, "names.html"),
+    `<body style="margin:0;font-family:Arial;background:#fff">
+<div id="card-host" style="margin:8px;height:40px;background:#EEE"></div>
+<div aria-label="Account menu" style="margin:8px;height:40px;background:#DDD"></div>
+<div id="summary" class="p-4 mt-2" style="margin:8px;height:40px;background:#CCC"></div>
+<div class="px-2 price-row" style="margin:8px;height:40px;background:#BBB"></div>
+<div class="mt-2 p-4" style="margin:8px;height:40px;background:#AAA"></div>
+<script>const el = document.getElementById("card-host"); const fiber = {}; fiber.return = { type: function PriceCard() {}, child: fiber }; el["__reactFiber$test"] = fiber;</script>
+</body>`,
+  );
+  const res = text(await call(client, "import_ui", { filePath: file, source: { kind: "web", url: `file://${path.join(dir, "names.html")}` }, name: "Names" }));
+  const id = /"Names" \((\S+)\)/.exec(res)[1];
+  const names = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "frame" && n.fill ? n.name : undefined).filter(Boolean)))` })))[1]);
+  for (const n of ["PriceCard", "Account menu", "Summary", "Price row"]) assert.ok(names.includes(n), `${n} in ${names.join(", ")}`);
+  assert.ok(names.some((n) => /nth-of-type|^div$/.test(n)), "no name in the code: the selector stays the last resort");
+});
+
+test("a marker that only shares a component's name is not an instance unless its texts line up", async () => {
+  fs.writeFileSync(path.join(dir, "rows.html"), `<body style="margin:0;font-family:Arial;background:#fff"><div data-pen="C/Pill" style="margin:16px;display:flex;gap:8px;background:#EEE"><span>Kênh báo</span><span>08:15</span><span>Sống</span></div></body>`);
+  const res = text(await call(client, "import_ui", { filePath: file, source: { kind: "web", url: `file://${path.join(dir, "rows.html")}` }, name: "Rows" }));
+  assert.match(res, /0 component instances/, "C/Pill has one text, this element shows three");
+});
