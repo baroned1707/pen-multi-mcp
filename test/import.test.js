@@ -186,3 +186,96 @@ test("import_ui points out repeated structures that are not components", async (
   const res = await call(client, "import_ui", { filePath: file, source: { kind: "web", url: `file://${path.join(dir, "list.html")}` }, name: "List" });
   assert.match(text(res), /Repeated like a component but not one: 3× "[^"]+"/);
 });
+
+test("import_ui keeps letter spacing, so tracked text keeps its width", async () => {
+  fs.writeFileSync(path.join(dir, "tracked.html"), `<body style="margin:0;font-family:Arial;background:#fff"><p style="margin:16px;font-size:12px;letter-spacing:2px">20:30 – 03:00 · DO NOT WATCH THE SCREEN</p></body>`);
+  const src = { kind: "web", url: `file://${path.join(dir, "tracked.html")}` };
+  const res = await call(client, "import_ui", { filePath: file, source: src, name: "Tracked" });
+  const id = /"Tracked" \((\S+)\)/.exec(text(res))[1];
+  const ls = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "text" ? n.letterSpacing : undefined).filter((x) => x !== undefined)))` })))[1]);
+  assert.deepEqual(ls, [2]);
+  const v = await call(client, "verify", { filePath: file, target: id, source: src, crops: 0 });
+  assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
+});
+
+test("import_ui turns icons into icon nodes when they are among the document's icons, and keeps the rest as crops", async () => {
+  await call(client, "execute", {
+    filePath: file,
+    input: `const lib = Insert(document, { type: "frame", name: "Icon set", x: 0, y: -1400, width: 300, height: 40, layout: "horizontal", gap: 8 });
+for (const icon of ["chevron-right", "chevron-left", "plus", "check", "info", "x", "search", "bell"]) Insert(lib, { type: "icon", library: "lucide", icon, width: 24, height: 24, fill: "#111111" });`,
+  });
+  const svg = (paths) => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+  fs.writeFileSync(
+    path.join(dir, "icons.html"),
+    `<body style="margin:0;background:#fff;font-family:Arial"><div style="display:flex;gap:16px;padding:16px">
+${svg('<path d="m9 18 6-6-6-6"/>')}${svg('<path d="M5 12h14"/><path d="M12 5v14"/>')}${svg('<path d="M20 6 9 17l-5-5"/>')}${svg('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>')}
+${svg('<path d="M3 3h18v18H3z"/><path d="M3 21 21 3"/><circle cx="8" cy="8" r="2"/>')}
+</div></body>`,
+  );
+  const src = { kind: "web", url: `file://${path.join(dir, "icons.html")}` };
+  const res = text(await call(client, "import_ui", { filePath: file, source: src, name: "Icons" }));
+  assert.match(res, /Icons: 4 of 5 icon elements are icon nodes/);
+  const id = /"Icons" \((\S+)\)/.exec(res)[1];
+  const got = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "icon" ? n.icon : undefined).filter(Boolean)))` })))[1]);
+  assert.deepEqual(got, ["chevron-right", "plus", "check", "info"]);
+});
+
+test("import_ui names layers after the code: React component, aria-label, id, a name-like class — not selectors", async () => {
+  fs.writeFileSync(
+    path.join(dir, "names.html"),
+    `<body style="margin:0;font-family:Arial;background:#fff">
+<div id="card-host" style="margin:8px;height:40px;background:#EEE"></div>
+<div aria-label="Account menu" style="margin:8px;height:40px;background:#DDD"></div>
+<div id="summary" class="p-4 mt-2" style="margin:8px;height:40px;background:#CCC"></div>
+<div class="px-2 price-row" style="margin:8px;height:40px;background:#BBB"></div>
+<div class="mt-2 p-4" style="margin:8px;height:40px;background:#AAA"></div>
+<script>const el = document.getElementById("card-host"); const fiber = {}; fiber.return = { type: function PriceCard() {}, child: fiber }; el["__reactFiber$test"] = fiber;</script>
+</body>`,
+  );
+  const res = text(await call(client, "import_ui", { filePath: file, source: { kind: "web", url: `file://${path.join(dir, "names.html")}` }, name: "Names" }));
+  const id = /"Names" \((\S+)\)/.exec(res)[1];
+  const names = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "frame" && n.fill ? n.name : undefined).filter(Boolean)))` })))[1]);
+  for (const n of ["PriceCard", "Account menu", "Summary", "Price row"]) assert.ok(names.includes(n), `${n} in ${names.join(", ")}`);
+  assert.ok(names.some((n) => /nth-of-type|^div$/.test(n)), "no name in the code: the selector stays the last resort");
+});
+
+test("a marker that only shares a component's name is not an instance unless its texts line up", async () => {
+  fs.writeFileSync(path.join(dir, "rows.html"), `<body style="margin:0;font-family:Arial;background:#fff"><div data-pen="C/Pill" style="margin:16px;display:flex;gap:8px;background:#EEE"><span>Kênh báo</span><span>08:15</span><span>Sống</span></div></body>`);
+  const res = text(await call(client, "import_ui", { filePath: file, source: { kind: "web", url: `file://${path.join(dir, "rows.html")}` }, name: "Rows" }));
+  assert.match(res, /0 component instances/, "C/Pill has one text, this element shows three");
+});
+
+test("import_ui lays grids and wrapping rows out as rows of auto layout, and keeps the round trip a MATCH", async () => {
+  const cell = (t) => `<div style="height:40px;background:#E5E7EB;border-radius:8px;font-size:14px;padding:8px">${t}</div>`;
+  fs.writeFileSync(
+    path.join(dir, "grid.html"),
+    `<body style="margin:0;font-family:Arial;background:#fff">
+<div style="display:grid;grid-template-columns:repeat(3,100px);gap:12px 8px;padding:16px">${["A", "B", "C", "D", "E", "F"].map(cell).join("")}</div>
+<div style="display:flex;flex-wrap:wrap;gap:10px;padding:16px;width:260px">${["one", "two", "three", "four", "five"].map((t) => `<span style="display:inline-block;width:70px;height:28px;background:#DBEAFE;font-size:12px">${t}</span>`).join("")}</div>
+<div style="display:grid;grid-template-columns:1fr;row-gap:6px;padding:16px">${["x", "y", "z"].map(cell).join("")}</div>
+</body>`,
+  );
+  const src = { kind: "web", url: `file://${path.join(dir, "grid.html")}` };
+  const res = text(await call(client, "import_ui", { filePath: file, source: src, name: "Grid" }));
+  const id = /"Grid" \((\S+)\)/.exec(res)[1];
+  const frames = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.type === "frame" && n.layout !== "none" ? [n.name, n.layout ?? "horizontal", n.gap] : undefined).filter(Boolean)))` })))[1]); // horizontal is a frame's default layout
+  assert.ok(frames.filter(([n, l, g]) => /^Row \d/.test(n) && l === "horizontal" && g === 8).length >= 2, `grid rows with the column gap: ${JSON.stringify(frames)}`);
+  assert.ok(frames.some(([, l, g]) => l === "vertical" && g === 12), "the grid: rows 12 apart");
+  assert.ok(frames.some(([, l, g]) => l === "vertical" && g === 6), "the one-column grid");
+  const v = await call(client, "verify", { filePath: file, target: id, source: src, crops: 0 });
+  assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
+});
+
+test("import_ui with components: repeated cards become one component and instances with their texts, and still MATCH", async () => {
+  const card = (t, p) => `<div class="order-card" style="width:358px;height:64px;margin:0 0 12px;background:#F3F4F6;border-radius:12px;display:flex;flex-direction:column;justify-content:center;padding:0 16px;box-sizing:border-box"><span style="font-size:16px;font-weight:700">${t}</span><span style="font-size:13px;color:#6B7280">${p}</span></div>`;
+  fs.writeFileSync(path.join(dir, "cards.html"), `<body style="margin:0;padding:16px;font-family:Arial;background:#fff">${card("Order #1", "$12.00")}${card("Order #2", "$30.50")}${card("Order #3", "$7.25")}</body>`);
+  const src = { kind: "web", url: `file://${path.join(dir, "cards.html")}` };
+  const res = text(await call(client, "import_ui", { filePath: file, source: src, name: "Cards", components: true }));
+  assert.match(res, /Components made: Order card \(2 instances\)/, res);
+  const id = /"Cards" \((\S+)\)/.exec(res)[1];
+  const nodes = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: file, input: `Print("N", JSON.stringify(Get(${JSON.stringify(id)}, (n) => n.reusable || n.type === "ref" ? [n.type, !!n.reusable, Object.values(n.descendants ?? {}).map((d) => d.content)] : undefined).filter(Boolean)))` })))[1]);
+  assert.deepEqual(nodes.map((n) => n[1]), [true, false, false]);
+  assert.deepEqual(nodes.slice(1).map((n) => n[2]), [["Order #2", "$30.50"], ["Order #3", "$7.25"]]);
+  const v = await call(client, "verify", { filePath: file, target: id, source: src, crops: 0 });
+  assert.match(text(v), /Verdict: MATCH/, text(v).split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
+});

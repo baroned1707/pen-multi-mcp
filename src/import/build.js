@@ -44,14 +44,22 @@ const textStyle = (el, tokens, numbers) => {
   if (el.fontWeight) out.fontWeight = String(el.fontWeight);
   if (el.fontFamily) out.fontFamily = el.fontFamily;
   if (el.lineHeight && el.fontSize) out.lineHeight = r2(el.lineHeight / el.fontSize);
+  if (el.letterSpacing) out.letterSpacing = r2(el.letterSpacing);
   return out;
 };
 
 // "/" separates layer addresses (verify markers), so it never goes into a name.
 export const safeName = (s) => String(s).replace(/\s*\/\s*/g, " – ");
+const words = (s) => String(s).replace(/[-_]+/g, " ").replace(/\b\w/, (c) => c.toUpperCase());
 const nameOf = (el) => {
   const marker = el.marker && String(el.marker).replace(/^.*:id\//, "").replace(/^pen:/, "");
   if (marker) return safeName(marker.split("/").pop());
+  // A text layer is named by what it says; a box by what the code calls it.
+  const h = el.nameHint ?? {};
+  if (!el.text || el.bg || el.borderWidth > 0) {
+    const named = h.component ?? h.label ?? (h.id && words(h.id)) ?? (h.cls && words(h.cls));
+    if (named) return safeName(named);
+  }
   if (el.text) return safeName(el.text.replace(/\s+/g, " ").slice(0, 32));
   const sel = String(el.selector ?? "").split(">").pop().trim();
   return safeName(sel || el.tag || "Box");
@@ -78,7 +86,7 @@ function textPlacement(el, origin) {
  * Elements that paint nothing are dropped and their children re-parented to the nearest kept
  * ancestor, so the imported tree is only as deep as what is visible.
  */
-export function buildSpecs(snapshot, { tokens = [], numbers = null, components = null, images = null, frameHeight, autoLayout = true } = {}) {
+export function buildSpecs(snapshot, { tokens = [], numbers = null, components = null, images = null, icons = null, frameHeight, autoLayout = true, makeComponents: make = false } = {}) {
   const byIndex = new Map(snapshot.elements.map((el) => [el.i, el]));
   const kept = new Map(); // element index -> spec key (frames only: a text node cannot hold children)
   const specs = [];
@@ -136,7 +144,13 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
   for (const el of snapshot.elements) {
     flushPending(el);
     if (insideInstance(el)) continue;
-    const comp = el.marker && components?.get(String(el.marker).replace(/^.*:id\//, "").replace(/^pen:/, ""));
+    let comp = el.marker && components?.get(String(el.marker).replace(/^.*:id\//, "").replace(/^pen:/, ""));
+    // A marker naming the component by id is proof. By name ("Row", "Card") it is only a hint:
+    // taken when the element shows as many texts as the component has, so every one is overridden.
+    if (comp && !comp.byId) {
+      const shown = snapshot.elements.filter((c) => c.text && !c.icon && c.i !== el.i && isInside(c, el.i)).length || (el.text ? 1 : 0);
+      if (shown !== comp.texts.length) comp = null;
+    }
     if (comp) {
       const { key: parent, box: pbox } = keyOf(el);
       const own = boxOf(el);
@@ -160,7 +174,7 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
     const text = el.text && !el.icon ? el.text : null;
     // An unpainted flex container with several children is kept as a structural frame, so its
     // children can be laid out by it (auto layout) instead of moving up to a painted ancestor.
-    const structural = autoLayout && layouts.get(el.i) && !layouts.get(el.i).wrap && (childCount.get(el.i) ?? 0) >= 2;
+    const structural = autoLayout && layouts.get(el.i) && (childCount.get(el.i) ?? 0) >= 2;
     if (!bg && !border && !visual && !text && !el.marker && !structural) continue;
     const { key: parent, box: pbox } = keyOf(el);
     const own = boxOf(el);
@@ -186,6 +200,17 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
       props.stroke = border;
       props.strokeWidth = r2(el.borderWidth);
     }
+    // An icon recognised among the document's icons becomes an icon node (its crop stays the fallback).
+    const iconHit = visual && icons?.get(el.i);
+    if (iconHit) {
+      const [library, icon] = iconHit.split(":");
+      const iprops = { type: "icon", name, library, icon, x, y, width: w, height: h };
+      const fg = tokenOrHex(el.fg, tokens);
+      if (fg) iprops.fill = fg;
+      specs.push({ key, parent, props: iprops, fallback: props, el: el.i });
+      kept.set(el.i, key);
+      continue;
+    }
     specs.push({ key, parent, props, el: el.i });
     kept.set(el.i, key);
     if (text) {
@@ -196,7 +221,108 @@ export function buildSpecs(snapshot, { tokens = [], numbers = null, components =
     }
   }
   flushPending(null);
-  if (autoLayout) applyAutoLayout(specs, byIndex, layouts);
+  if (autoLayout) {
+    applyRows(specs, byIndex, layouts);
+    applyAutoLayout(specs, byIndex, layouts);
+  }
+  if (make) makeComponents(specs);
+  return specs;
+}
+
+/**
+ * Runs of three or more sibling frames with the same structure (types and sizes, recursively)
+ * become one component: the first is made reusable, the others instances of it whose texts are
+ * overrides, matched in order. Groups whose texts do not line up are left alone. Sets
+ * `specs.components` to [{ name, count }].
+ */
+export function makeComponents(specs) {
+  const kids = new Map();
+  for (const s of specs) if (s.parent) (kids.get(s.parent) ?? kids.set(s.parent, []).get(s.parent)).push(s);
+  const sig = (s) => `${s.props.type}:${Math.round(s.props.width ?? 0)}x${Math.round(s.props.height ?? 0)}(${(kids.get(s.key) ?? []).map(sig).join(",")})`;
+  const subtree = (s) => (kids.get(s.key) ?? []).flatMap((c) => [c, ...subtree(c)]);
+  // What an instance may override, per node: anything that makes it look different.
+  const LOOK = ["content", "fill", "stroke", "strokeWidth", "icon", "library", "fontWeight", "fontSize", "fontFamily", "lineHeight", "letterSpacing", "textAlign", "cornerRadius", "opacity", "enabled"];
+  const diff = (m, s) => {
+    const out = {};
+    for (const k of LOOK) if (JSON.stringify(m.props[k]) !== JSON.stringify(s.props[k]) && s.props[k] !== undefined) out[k] = s.props[k];
+    return out;
+  };
+  const made = [];
+  const drop = new Set();
+  for (const [, list] of kids) {
+    const groups = new Map();
+    for (const s of list) if (s.props.type === "frame" && (kids.get(s.key) ?? []).length) (groups.get(sig(s)) ?? groups.set(sig(s), []).get(sig(s))).push(s);
+    for (const g of groups.values()) {
+      if (g.length < 3) continue;
+      const [first, ...rest] = g;
+      const master = subtree(first);
+      first.props = { ...first.props, reusable: true };
+      for (const s of rest) {
+        // Same structure, so the same order: node k of this copy is node k of the component.
+        const mine = subtree(s);
+        const byKey = {};
+        master.forEach((m, k) => {
+          const d = diff(m, mine[k]);
+          if (Object.keys(d).length) byKey[m.key] = d;
+        });
+        for (const d of mine) drop.add(d);
+        const own = diff(first, s);
+        s.props = { type: "ref", refKey: first.key, name: s.props.name, x: s.props.x, y: s.props.y, width: s.props.width, height: s.props.height, ...own, ...(Object.keys(byKey).length ? { descendantsByKey: byKey } : {}) };
+      }
+      made.push({ name: first.props.name, count: g.length });
+    }
+  }
+  for (let i = specs.length - 1; i >= 0; i--) if (drop.has(specs[i])) specs.splice(i, 1);
+  specs.components = made;
+  return specs;
+}
+
+/**
+ * Grids and wrapping flex rows as rows of auto layout: children grouped by their top edge (±2 px);
+ * one row → horizontal, one per row → vertical, several rows → a vertical frame of horizontal row
+ * frames (inserted into `specs`). Row gaps and column gaps come from the layout. Everything is
+ * marked `auto`, so import_ui checks it against the page and puts back what does not match.
+ */
+export function applyRows(specs, byIndex, layouts = new Map()) {
+  for (let s = 0; s < specs.length; s++) {
+    const sp = specs[s];
+    if (sp.props.type !== "frame" || sp.rows) continue;
+    const el = byIndex.get(sp.el);
+    const lay = el && (layouts.get(el.i) ?? el.layout);
+    if (!lay || !(lay.dir === "grid" || (lay.wrap && !/column|reverse/.test(lay.dir)))) continue;
+    const kids = specs.filter((k) => k.parent === sp.key);
+    if (kids.length < 2 || !kids.every((k) => byIndex.get(k.el)?.parent === el.i && typeof k.props.x === "number" && typeof k.props.y === "number")) continue;
+    const rows = [];
+    for (const k of [...kids].sort((a, b) => a.props.y - b.props.y || a.props.x - b.props.x)) {
+      const row = rows.find((r) => Math.abs(r.y - k.props.y) <= 2);
+      if (row) row.kids.push(k);
+      else rows.push({ y: k.props.y, kids: [k] });
+    }
+    rows.forEach((r) => r.kids.sort((a, b) => a.props.x - b.props.x));
+    const pad = lay.padding.map(r2);
+    const base = { padding: pad, justifyContent: "start", alignItems: "start" };
+    if (rows.length === 1) {
+      Object.assign(sp.props, { layout: "horizontal", gap: r2(lay.colGap ?? lay.gap ?? 0), ...base });
+    } else if (rows.every((r) => r.kids.length === 1)) {
+      Object.assign(sp.props, { layout: "vertical", gap: r2(lay.rowGap ?? 0), ...base });
+    } else {
+      // A frame per row, inserted before the row's first child so it exists when they are.
+      rows.forEach((r, i) => {
+        const x0 = Math.min(...r.kids.map((k) => k.props.x)), y0 = Math.min(...r.kids.map((k) => k.props.y));
+        const x1 = Math.max(...r.kids.map((k) => k.props.x + (k.props.width ?? 0))), y1 = Math.max(...r.kids.map((k) => k.props.y + (k.props.height ?? 0)));
+        const key = `${sp.key}r${i}`;
+        const rowSpec = { key, parent: sp.key, props: { type: "frame", name: `Row ${i + 1}`, x: r2(x0), y: r2(y0), width: r2(x1 - x0), height: r2(y1 - y0), layout: "horizontal", gap: r2(lay.colGap ?? 0), justifyContent: "start", alignItems: "start" }, auto: true, rows: true };
+        for (const k of r.kids) {
+          k.parent = key;
+          k.props = { ...k.props, x: r2(k.props.x - x0), y: r2(k.props.y - y0) };
+        }
+        specs.splice(specs.indexOf(r.kids.reduce((a, b) => (specs.indexOf(a) < specs.indexOf(b) ? a : b))), 0, rowSpec);
+      });
+      Object.assign(sp.props, { layout: "vertical", gap: r2(lay.rowGap ?? 0), ...base });
+    }
+    sp.auto = true;
+    sp.rows = true; // applyAutoLayout leaves it as is
+  }
   return specs;
 }
 
@@ -230,10 +356,10 @@ export function applyAutoLayout(specs, byIndex, layouts = new Map()) {
   const children = new Map();
   for (const sp of specs) if (sp.parent) (children.get(sp.parent) ?? children.set(sp.parent, []).get(sp.parent)).push(sp);
   for (const sp of specs) {
-    if (sp.props.type !== "frame") continue;
+    if (sp.props.type !== "frame" || sp.rows) continue;
     const el = byIndex.get(sp.el);
     const lay = el && (layouts.get(el.i) ?? el.layout);
-    if (!lay || lay.wrap || /reverse/.test(lay.dir)) continue;
+    if (!lay || lay.wrap || lay.dir === "grid" || /reverse/.test(lay.dir)) continue;
     const kids = children.get(sp.key) ?? [];
     if (!kids.length) continue;
     const flexItems = kids.every((k) => {
@@ -276,9 +402,9 @@ export function snippets({ screen, specs, batch = 200, key = `__penImport_${Date
   const G = `globalThis[${JSON.stringify(key)}]`;
   out.push(`${G} = { root: Insert(document, ${JSON.stringify(screen)}) };\nPrint("ROOT", ${G}.root);`);
   for (let i = 0; i < specs.length; i += batch) {
-    const part = specs.slice(i, i + batch).map((s) => [s.key, s.parent, s.props]);
+    const part = specs.slice(i, i + batch).map((s) => [s.key, s.parent, s.props, s.fallback ?? null]);
     out.push(
-      `const M = ${G};\nif (!M) throw new Error("the import's state was lost (the editor restarted between batches); delete the partial frame and import again");\nfor (const [key, parent, props] of ${JSON.stringify(part)}) M[key] = Insert(parent ? M[parent] : M.root, props);\nPrint("DONE", ${Math.min(i + batch, specs.length)});`,
+      `const M = ${G};\nif (!M) throw new Error("the import's state was lost (the editor restarted between batches); delete the partial frame and import again");\nlet FB = 0;\nfor (const [key, parent, props, fallback] of ${JSON.stringify(part)}) {\n  if (props.refKey) { props.ref = M[props.refKey]; delete props.refKey; }\n  if (props.descendantsByKey) { props.descendants = Object.fromEntries(Object.entries(props.descendantsByKey).map(([k, v]) => [M[k], v])); delete props.descendantsByKey; }\n  try { M[key] = Insert(parent ? M[parent] : M.root, props); }\n  catch (e) { if (!fallback) throw e; M[key] = Insert(parent ? M[parent] : M.root, fallback); FB++; }\n}\nPrint("DONE", ${Math.min(i + batch, specs.length)}, FB);`,
     );
   }
   out.push(`Print("KEYS", JSON.stringify(Object.fromEntries(Object.entries(${G}).filter(([k]) => k !== "root"))));\ndelete ${G};\nPrint("CLEAN", 1);`);

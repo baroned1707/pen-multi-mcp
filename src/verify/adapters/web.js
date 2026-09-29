@@ -34,6 +34,28 @@ function collect(limit) {
     const n = parseFloat(v);
     return Number.isFinite(n) ? n : undefined;
   };
+  // What a person would call an element, for import_ui's layer names: the React component whose
+  // root it is (from its fiber), its aria-label, a hand-written id, or a class that reads as a name.
+  // Utility classes (Tailwind and the like): a known prefix followed by a value ("mt-4", "text-sm",
+  // "items-center"), or a bare utility word. "order-card" or "price-row" read as names.
+  const UTILITY = /^(p|m|px|py|pt|pb|pl|pr|mx|my|mt|mb|ml|mr|w|h|size|min|max|gap|text|font|bg|border|rounded|items|justify|content|self|place|col|row|space|leading|tracking|shadow|opacity|z|top|left|right|bottom|inset|overflow|order|basis|grow|shrink|transition|duration|ease|cursor|select|pointer|sr|flex|grid|aspect|object|ring|outline|divide|fill|stroke|translate|scale|rotate)-(\d|\[|x$|y$|px$|xs|sm|md|lg|xl|\dxl|full|auto|screen|fit|min|max|center|start|end|between|around|evenly|stretch|baseline|none|hidden|visible|scroll|clip|bold|semibold|medium|light|normal|thin|extrabold|black|white|transparent|current|inherit|only|not|wrap|nowrap|reverse|col|row|first|last|left|right|top|bottom|inner|solid|dashed|dotted|pointer|default|nowrap)|^(flex|grid|block|inline|hidden|relative|absolute|fixed|sticky|static|container|truncate|italic|underline|uppercase|lowercase|capitalize|shadow|rounded|border|transition|contents|sr-only|visible|invisible)$|^(bg|text|border|fill|stroke|ring|from|to|via|shadow|outline|divide|decoration|accent|caret|placeholder)-[a-z]+-\d{2,3}$|[:/]/;
+  const nameHint = (el) => {
+    const out = {};
+    const fiberKey = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
+    const fiber = fiberKey && el[fiberKey];
+    const owner = fiber?.return;
+    const type = owner?.type;
+    if (typeof type === "function" && owner.child === fiber) {
+      const n = type.displayName || type.name;
+      if (n && /^[A-Z]/.test(n) && !/^(Fragment|Provider|Consumer|Suspense|StrictMode|Router|Routes|Route|Outlet|Link|NavLink)$/.test(n)) out.component = n;
+    }
+    const label = el.getAttribute("aria-label") || el.getAttribute("title");
+    if (label && label.length <= 40) out.label = label;
+    if (el.id && /^[a-z][\w-]{2,}$/i.test(el.id) && !/\d{3,}|^:r/.test(el.id)) out.id = el.id;
+    const cls = [...(el.classList ?? [])].find((c) => c.length >= 3 && /^[a-z][a-z0-9]*([-_][a-z0-9]+)*$/i.test(c) && !UTILITY.test(c));
+    if (cls) out.cls = cls;
+    return Object.keys(out).length ? out : undefined;
+  };
   // nth-of-type positions, computed once per parent (a list of thousands of siblings stays linear).
   const nth = new Map();
   const nthOf = (el) => {
@@ -260,6 +282,7 @@ function collect(limit) {
         parent,
         tag: el.tagName.toLowerCase(),
         selector: path(el),
+        nameHint: nameHint(el),
         marker: el.getAttribute("data-pen") || undefined,
         text: text || undefined,
         truncated: truncated || undefined,
@@ -279,22 +302,28 @@ function collect(limit) {
         textAlign: text ? ({ start: "left", end: "right", justify: "left", "-webkit-center": "center" }[cs.textAlign] ?? cs.textAlign) : undefined,
         fontWeight: text ? num(cs.fontWeight) : undefined,
         lineHeight: text ? lh : undefined,
+        letterSpacing: text && cs.letterSpacing !== "normal" ? num(cs.letterSpacing) || undefined : undefined,
         radius: num(cs.borderTopLeftRadius),
         borderWidth: bw,
         borderColor: bw > 0 ? rgb(cs.borderTopColor) : undefined,
         opacity: Number(cs.opacity),
         absolute: cs.position === "absolute" || undefined,
-        // Flexbox, for import_ui's auto layout: padding includes the border (children start inside both).
+        // Flexbox and grid, for import_ui's auto layout: padding includes the border (children start
+        // inside both). A grid is laid out as rows by import_ui, with its row and column gaps.
         layout: /flex$/.test(cs.display)
           ? {
               dir: cs.flexDirection,
               gap: (cs.flexDirection.startsWith("column") ? num(cs.rowGap) : num(cs.columnGap)) || 0,
+              rowGap: num(cs.rowGap) || 0,
+              colGap: num(cs.columnGap) || 0,
               padding: ["Top", "Right", "Bottom", "Left"].map((side) => (num(cs[`padding${side}`]) || 0) + (num(cs[`border${side}Width`]) || 0)),
               align: cs.alignItems,
               justify: cs.justifyContent,
               wrap: cs.flexWrap !== "nowrap" || undefined,
             }
-          : undefined,
+          : /grid$/.test(cs.display)
+            ? { dir: "grid", rowGap: num(cs.rowGap) || 0, colGap: num(cs.columnGap) || 0, padding: ["Top", "Right", "Bottom", "Left"].map((side) => (num(cs[`padding${side}`]) || 0) + (num(cs[`border${side}Width`]) || 0)), align: "start", justify: "start" }
+            : undefined,
       };
       index.set(el, o.i);
       out.push(o);
