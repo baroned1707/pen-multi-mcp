@@ -1,5 +1,6 @@
 // The eval harness itself: transcript parsing, process scores, and the both-changed workspace.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { test } from "node:test";
 import { parseStream, score } from "../bench/eval/behavior.mjs";
@@ -31,6 +32,8 @@ test("the both-changed workspace differs on both sides", async () => {
   try {
     const v = await check(w, new URL("../src/index.js", import.meta.url).pathname);
     assert.equal(v.match, false, v.summary);
+    assert.equal(fs.readdirSync(`${w.dir}/design-sync`).length, 1, "the earlier MATCH is recorded");
+    assert.match(execFileSync("git", ["log", "--oneline"], { cwd: w.dir, encoding: "utf8" }), /matched/);
   } finally {
     fs.rmSync(w.dir, { recursive: true, force: true });
   }

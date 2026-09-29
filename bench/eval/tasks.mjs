@@ -14,6 +14,7 @@ export const TASKS = {
     code: () => fs.readFileSync(path.join(FIX, "profile.html"), "utf8").replace("background:#6366F1;color:#fff;font-size:16px;font-weight:600", "background:#059669;color:#fff;font-size:16px;font-weight:600"),
     designEdit: (frameId) => `const t = Get(${JSON.stringify(frameId)}, (n) => n.type === "text" && n.content === "Profile" ? n.id : undefined).filter(Boolean)[0];\nUpdate(t, { content: "Account" });`,
     design: "profile.html",
+    matchedBefore: true,
     prompt: (w) => `The design frame "Profile" in ${w.pen} and the page ${w.page} matched last week (pen-multi verify reported MATCH). Since then, different people changed both. Bring design and code back in sync using the pen-multi tools.`,
     direction: "both",
   },
