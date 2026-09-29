@@ -188,6 +188,45 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
     return latest?.pen?.sha1 && now && latest.pen.sha1 !== now ? latest.generatedAt : null;
   }
 
+  /**
+   * The engine loads a font the first time it lays out text in it (~2 s later), measuring in a
+   * fallback font until then. Measuring tools call this first: a frame using a font family this
+   * editor has not settled yet waits until FONT_SETTLE_MS after that first layout and until its
+   * text sizes stop changing (at most ~8 s). Settled families are remembered per editor, so this
+   * costs one read afterwards; the app is never delayed. Returns true when it waited.
+   */
+  const FONT_SETTLE_MS = Number(process.env.PEN_MULTI_FONT_SETTLE_MS ?? 2500);
+  async function settleFonts(target, id) {
+    const s = target.mode === "app" || !FONT_SETTLE_MS ? null : pool.sessions.get(target.file); // 0 turns it off
+    if (!s) return false;
+    const run = reader(target);
+    const q = JSON.stringify(id);
+    const read = async () => {
+      const t = (await run(`Print("F", JSON.stringify(Get(${q}, (n, c) => n.type === "text" ? [String(n.fontFamily ?? ""), Math.round(c.bounds.width), Math.round(c.bounds.height)] : undefined).filter(Boolean)))`)).text ?? "";
+      try {
+        return JSON.parse(/F (.*)/.exec(t)?.[1] ?? "[]");
+      } catch {
+        return [];
+      }
+    };
+    const started = Date.now();
+    let prev = await read(); // this layout starts loading the frame's fonts
+    s.fontsSettled ??= new Set();
+    const families = [...new Set(prev.map((x) => x[0]))];
+    if (!families.some((f) => !s.fontsSettled.has(f))) return false;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const key = (list) => JSON.stringify(list);
+    while (Date.now() - started < 8000) {
+      await wait(Date.now() - started < FONT_SETTLE_MS ? FONT_SETTLE_MS - (Date.now() - started) : 500);
+      const now = await read();
+      const stable = key(now) === key(prev);
+      prev = now;
+      if (stable && Date.now() - started >= FONT_SETTLE_MS) break;
+    }
+    for (const f of families) s.fontsSettled.add(f);
+    return true;
+  }
+
   // Renders already attached in this session: file|id|design hash.
   const shown = new Set();
   const MAX_EDGE = 1568; // larger images are scaled down by the model anyway
@@ -314,7 +353,9 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
       }
       const { id, frame, analysis } = resolved;
       const run = reader(target);
-      const raw = resolved.raw ?? (await readSubtree(run, id));
+      // Text sizes are right only once the engine's fonts have loaded.
+      const waited = await settleFonts(target, id);
+      const raw = (!waited && resolved.raw) || (await readSubtree(run, id));
       const model = buildModel(raw);
       const crumb = breadcrumb(analysis, frame, model);
       const sec = sections(model);
@@ -438,5 +479,5 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
       return res;
     },
   );
-  return { invalidate, resolveTarget, reader, wrap, analysisOf };
+  return { invalidate, resolveTarget, reader, wrap, analysisOf, settleFonts };
 }

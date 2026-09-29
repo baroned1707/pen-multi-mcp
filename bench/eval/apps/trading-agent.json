@@ -1,0 +1,7 @@
+{
+  "repo": "~/Desktop/Workspace/personal/trading-agent",
+  "pen": "trading-agent.pen",
+  "app": { "cwd": "ui", "start": "npx vite --port {port} --strictPort --host 127.0.0.1" },
+  "link": ["ui/node_modules"],
+  "source": "ui/src"
+}

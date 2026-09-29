@@ -378,7 +378,8 @@ test("code-to-design: proposed edits for clear causes; applied to a copy of the 
   assert.match(t, /Update\("\w+", \{"fontSize":24\}\) {2}\/\/ the code's font size/);
   assert.match(t, /Update\("\w+", \{"enabled":false\}\) {2}\/\/ the code no longer shows it — hidden, not deleted/);
   assert.match(t, /Insert\("\w+", \{"type":"text","name":"Old promo banner","content":"Old promo banner"/);
-  assert.match(t, /No edit proposed for: .*layout: the cause \(gap, padding, order, sizing\) is not clear/);
+  // The reordered sections are a container edit now (Move), not an unexplained layout finding.
+  assert.match(t, /Move\("\w+", "\w+", 0\)/);
   assert.doesNotMatch(t, /Fix the high findings first/);
   const ops = [...t.matchAll(/^\d+\. ((?:Update|Insert)\(.*\))  \/\//gm)].map((m) => m[1]);
   const applied = await call(client, "execute", { filePath: copy, input: ops.join("\n") });
@@ -458,4 +459,36 @@ test("sync: both sides changed in different places is 'diverged' — carry each 
   assert.match(t, /- Design: .*Title text "Checkout" → "Pay"/);
   assert.match(t, /- Code: .*Total fontSize/);
   assert.match(t, /Next: both sides changed, in different places — carry each change to the other side/);
+});
+
+test("sync: a layout change on one side that shifts a node edited on the other is not a conflict", async () => {
+  await call(client, "save", { filePath: file });
+  const copy = path.join(dir, "shifted.pen");
+  fs.copyFileSync(file, copy);
+  const faithful = fs.readFileSync(path.join(dir, "faithful.html"), "utf8");
+  // The code changes the total's text; the design pads the summary more (which moves the total).
+  fs.writeFileSync(path.join(dir, "retext.html"), faithful.replace("</body>", `<script>addEventListener("DOMContentLoaded", () => { document.querySelector('[data-pen="Total"]').textContent = "Total 99.00"; });</script></body>`));
+  const v = (page) => call(client, "verify", { filePath: copy, target: "Checkout · light", source: { kind: "web", url: url(page) }, crops: 0 });
+  assert.match(text(await v("faithful.html")), /Recorded as the last match/);
+  const summaryId = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: copy, input: `Print("N", JSON.stringify(Get((n) => n.name === "Summary" ? n.id : undefined).filter(Boolean)))` })))[1])[0];
+  await call(client, "execute", { filePath: copy, input: `Update(${JSON.stringify(summaryId)}, { padding: 24, height: 96 })` });
+  await call(client, "save", { filePath: copy });
+  const t = text(await v("retext.html"));
+  assert.match(t, /Next: both sides changed, in different places/, t.split("## Since")[1]?.slice(0, 600));
+});
+
+test("code-to-design infers layout: the UI's gap and order become container edits that bring the design to MATCH", async () => {
+  await call(client, "save", { filePath: file });
+  const copy = path.join(dir, "layout.pen");
+  fs.copyFileSync(file, copy);
+  const faithful = fs.readFileSync(path.join(dir, "faithful.html"), "utf8");
+  fs.writeFileSync(path.join(dir, "relaid.html"), faithful.replace("</body>", `<script>addEventListener("DOMContentLoaded", () => { const q = (m) => document.querySelector('[data-pen="' + m + '"]'); q("Content").style.gap = "24px"; q("Summary").before(q("Items")); });</script></body>`));
+  const src = { kind: "web", url: url("relaid.html") };
+  const t = text(await call(client, "verify", { filePath: copy, target: "Checkout · light", source: src, direction: "code-to-design", crops: 0 }));
+  assert.match(t, /Move\("\w+", "\w+", 0\); Move\("\w+", "\w+", 1\)/, t.split("## Proposed")[1]?.slice(0, 800));
+  const ops = [...t.matchAll(/^[\d·]+\. ((?:Update|Insert|Move)\(.*?\))  \/\//gm)].map((m) => m[1]);
+  assert.ok(ops.some((o) => /gap: 24/.test(o)), "order and gap in one pass");
+  await call(client, "execute", { filePath: copy, input: ops.join("\n") });
+  const done = text(await call(client, "verify", { filePath: copy, target: "Checkout · light", source: src, crops: 0 }));
+  assert.match(done, /Verdict: MATCH/, done.split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
 });

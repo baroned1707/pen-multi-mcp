@@ -7,14 +7,14 @@ import { tokenOrHex } from "../import/build.js";
 const r2 = (v) => Math.round(v * 100) / 100;
 
 /** An execute snippet printing `USAGE {"fontSize":[names],"cornerRadius":[names]}`: the number tokens the document uses per property. */
-export const USAGE_SNIPPET = `const U = { fontSize: {}, cornerRadius: {} };
-Get((n) => { for (const k of ["fontSize", "cornerRadius"]) for (const v of [].concat(n[k] ?? [])) if (typeof v === "string" && v.startsWith("$")) U[k][v.slice(1)] = 1; return undefined; });
-Print("USAGE", JSON.stringify({ fontSize: Object.keys(U.fontSize), cornerRadius: Object.keys(U.cornerRadius) }));`;
+export const USAGE_SNIPPET = `const U = { fontSize: {}, cornerRadius: {}, spacing: {} };
+Get((n) => { for (const k of ["fontSize", "cornerRadius", "gap", "padding"]) for (const v of [].concat(n[k] ?? [])) if (typeof v === "string" && v.startsWith("$")) U[k === "gap" || k === "padding" ? "spacing" : k][v.slice(1)] = 1; return undefined; });
+Print("USAGE", JSON.stringify({ fontSize: Object.keys(U.fontSize), cornerRadius: Object.keys(U.cornerRadius), spacing: Object.keys(U.spacing) }));`;
 
 /** { fontSize, radius } number-token maps from the printed usage (see USAGE_SNIPPET). */
 export function propertyNumbers(variables, usageText) {
   const u = JSON.parse(/USAGE (.*)/.exec(usageText ?? "")?.[1] ?? "{}");
-  return { fontSize: numberTokens(variables, u.fontSize ?? []), radius: numberTokens(variables, u.cornerRadius ?? []) };
+  return { fontSize: numberTokens(variables, u.fontSize ?? []), radius: numberTokens(variables, u.cornerRadius ?? []), spacing: numberTokens(variables, u.spacing ?? []) };
 }
 
 /**
@@ -53,7 +53,7 @@ function containerAt(model, box) {
  * ([{ n, why }]). `theme` is the frame's theme (color tokens resolve in it); `elements` are the
  * UI elements in design coordinates (for texts only the code has).
  */
-export function designEdits(findings, { model, theme, elements = [], numbers = {} }) {
+export function designEdits(findings, { model, theme, elements = [], numbers = {}, layout = null }) {
   const colors = colorTokens(model.variables, theme);
   const color = (hex) => tokenOrHex(hex, colors);
   const size = (v) => numbers.fontSize?.get(v) ?? v;
@@ -116,19 +116,27 @@ export function designEdits(findings, { model, theme, elements = [], numbers = {
         break;
       }
       default:
-        skipped.push({ n: f.n, why: f.kind === "position" || f.kind === "size" || f.kind === "order" ? "layout: the cause (gap, padding, order, sizing) is not clear from one box" : "no single property to change" });
+        // Layout findings are answered by the container edits below when one explains them.
+        if (layout && ["position", "size", "order"].includes(f.kind) && layout.edits.some((e) => e.explains.has(f.designId))) break;
+        skipped.push({ n: f.n, why: f.kind === "position" || f.kind === "size" || f.kind === "order" ? "layout: no consistent gap, padding, order or size explains it" : "no single property to change" });
     }
   }
-  return { edits, skipped };
+  // Container edits, each with the findings it explains.
+  for (const e of layout?.edits ?? []) {
+    const ns = findings.filter((f) => f.designId && e.explains.has(f.designId) && ["position", "size", "order"].includes(f.kind)).map((f) => f.n);
+    if (ns.length || e.op.startsWith("Move(")) edits.push({ n: ns[0] ?? "·", op: e.op, why: `${e.why}${ns.length > 1 ? ` — explains findings ${ns.join(", ")}` : ""}` });
+  }
+  return { edits, skipped, notes: layout?.notes ?? [] };
 }
 
 /** The report section listing the proposed operations. */
-export function editLines({ edits, skipped }, { designChanged }) {
-  if (!edits.length && !skipped.length) return [];
+export function editLines({ edits, skipped, notes = [] }, { designChanged }) {
+  if (!edits.length && !skipped.length && !notes.length) return [];
   const lines = ["", "## Proposed design edits (code → design)"];
   if (designChanged) lines.push("⚠ The design was also edited since this frame's last verify: make sure the code, not the design, is the side to follow before applying these.");
   for (const e of edits) lines.push(`${e.n}. ${e.op}  // ${e.why}`);
   if (skipped.length) lines.push(`No edit proposed for: ${skipped.map((s) => `${s.n} (${s.why})`).join("; ")}.`);
+  for (const note of notes) lines.push(`- ${note}`);
   lines.push("Apply the ones you want with execute (they are not applied), then verify again. Values equal to a token are given as the token.");
   return lines;
 }

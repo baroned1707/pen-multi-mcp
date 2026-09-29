@@ -15,6 +15,7 @@ import { verifyScreen } from "./pipeline.js";
 import { contactSheet, findingCrops, renderReport, sheetRow } from "./report.js";
 import { pointFindingsAtCode } from "./code.js";
 import { USAGE_SNIPPET, designEdits, editLines, propertyNumbers } from "./reverse.js";
+import { layoutEdits } from "./layout.js";
 import { nextStep } from "../guide.js";
 import { annotate } from "../calllog.js";
 import { buildRecord, diffText, factsDiff, frameDiff, readRecord, recordPath, syncState, writeRecord } from "../sync/index.js";
@@ -284,6 +285,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       const { id, frame: picked, theme: frameTheme } = await pickFrame(target, wanted, { width, theme });
       if (src) src = withState(target, wanted, picked, src);
       if (src?.kind === "web" && !src.url) src = { ...src, url: routeUrl(target, wanted, picked) };
+      await design.settleFonts(target, id); // the design measured in its real fonts
       const model = buildModel(await readSubtree(run, id));
       const rootTheme = model.root.theme && typeof model.root.theme === "object" ? Object.values(model.root.theme)[0] : undefined;
       const d = designNodes(model);
@@ -354,7 +356,10 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
           const inD = hits(dz, f.address), inC = hits(cz, f.address);
           f.since = inD && inC ? "both" : inD ? "design" : inC ? "code" : undefined;
         }
-        const overlap = dz.some((a) => hits(cz, a));
+        // A conflict is both sides editing the same node on purpose. Moves and resizes are how a
+        // layout change elsewhere shows up (a larger gap shifts everything below it), not edits.
+        const intended = (x) => [...x.added, ...x.removed, ...x.changed.filter((c) => c.prop !== "box").map((c) => c.address)];
+        const overlap = intended(designDiff).some((a) => hits(intended(codeDiff), a));
         sync = { state: syncState({ record: prior, designChanged: dz.length + frameChange.length > 0, codeChanged: cz.length > 0, overlap }), recordedAt: prior.verifiedAt, design: diffText(designDiff), code: diffText(codeDiff) };
       }
       fs.writeFileSync(
@@ -381,7 +386,9 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         const s = result.scale ?? 1;
         const elements = (snapshot.elements ?? []).map((e) => ({ ...e, box: e.box && { x: e.box.x * s, y: e.box.y * s, w: e.box.w * s, h: e.box.h * s } }));
         const usage = await run(USAGE_SNIPPET);
-        const edits = designEdits(result.findings, { model, theme: frameTheme ?? rootTheme ?? null, elements, numbers: propertyNumbers(model.variables, usage.text) });
+        const numbers = propertyNumbers(model.variables, usage.text);
+        const layout = layoutEdits(model, new Map(pairs), { spacing: numbers.spacing });
+        const edits = designEdits(result.findings, { model, theme: frameTheme ?? rootTheme ?? null, elements, numbers, layout });
         reportLines = [...reportLines, ...editLines(edits, { designChanged: Boolean(previousHash && penHash && previousHash !== penHash) })];
       }
       // The same findings again and again: the fixes are not landing where verify looks.
