@@ -492,3 +492,17 @@ test("code-to-design infers layout: the UI's gap and order become container edit
   const done = text(await call(client, "verify", { filePath: copy, target: "Checkout · light", source: src, crops: 0 }));
   assert.match(done, /Verdict: MATCH/, done.split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
 });
+
+test("sync: the frame's own background changing in the design is not a conflict with a code edit", async () => {
+  await call(client, "save", { filePath: file });
+  const copy = path.join(dir, "bg.pen");
+  fs.copyFileSync(file, copy);
+  const v = (page) => call(client, "verify", { filePath: copy, target: "Checkout · light", source: { kind: "web", url: url(page) }, crops: 0 });
+  assert.match(text(await v("faithful.html")), /Recorded as the last match/);
+  const frameId = /# verify: Checkout · light \((\w+)\)/.exec(text(await v("faithful.html")))[1];
+  await call(client, "execute", { filePath: copy, input: `Update(${JSON.stringify(frameId)}, { fill: "#F0F0F0" })` });
+  await call(client, "save", { filePath: copy });
+  const t = text(await v("retext.html")); // the code changed the total's text
+  assert.match(t, /- Design: ~ Checkout · light fill/);
+  assert.match(t, /Next: both sides changed, in different places/, t.split("## Since")[1]?.slice(0, 400));
+});

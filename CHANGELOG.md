@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.1 — 2026-09-29
+
+- Sync: findings are tagged with the side that edited them, and only with the side that merely moved them (a layout change elsewhere) when neither edited them; the frame's own background changing in the design no longer made every code edit a conflict.
+- Real-app eval on 1.6.0 (trading-agent, n = 3): code → design 3/3, both 2/3 — the failure was the agent asking before renaming a tab label shared by every screen (a mutation no designer would make), not a pen-multi fault.
+
 ## 1.6.0 — 2026-09-29
 
 - **Fonts**: a headless editor lays text out in a fallback font until its fonts load (~2 s after the first layout); verify, inspect, lint, import_ui and sync_status on a just-opened file measured the fallback, so a matching screen could report DIFFERS (trading-agent: 26 findings, then MATCH on the next call). Measuring tools now wait per editor and font family until text sizes settle (`PEN_MULTI_FONT_SETTLE_MS`, 0 turns it off). The web capture also loads every declared `@font-face` before measuring.
