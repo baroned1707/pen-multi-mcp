@@ -46,9 +46,9 @@ Files are written as tmp + rename, with numbers rounded and keys sorted. DIFFERS
 
 **sync_status** gives each screen frame one state:
 
-- **design side**: an unchanged `.pen` SHA-1 means unchanged. Otherwise the frame is read again (a bounded number per call) and compared by address with the record: nodes added, removed, and properties changed (from → to).
+- **design side**: an unchanged `.pen` SHA-1 means unchanged. Otherwise the frame is read again (a bounded number per call, `maxReads`) and compared by address with the record, exactly (design data has no capture noise): nodes added, removed, and properties changed (from → to), plus the frame's own fill.
 - **code side, cheap**: the marker index maps the screen to its files; `git diff --name-only <record commit>` tells whether they changed. When the screen has no markers, or the record's commit is not in history, it says so.
-- **code side, deep** (`capture: true`, a bounded number of screens): capture again and compare with the record's UI facts using compare's tolerances. The result is what changed in the code.
+- **code side, deep**: `verify` itself. On DIFFERS it compares the capture with the record's UI facts (compare's tolerances) and lists what changed in the code; sync_status points at it for rows whose code side is unknown or changed.
 - **states**: `in sync` · `design changed` · `code changed` · `both changed` · `differs` · `never`, each with its `Next:` (verify; verify with direction code-to-design; ask the user which side wins, with both change lists).
 
 **verify** uses the record: when DIFFERS, each finding is tagged *(design changed)*, *(code changed)* or *(both)* since the last match, and `Next:` follows the tag.

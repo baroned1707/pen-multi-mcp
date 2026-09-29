@@ -126,5 +126,7 @@ export function verifyScreen({ design, snapshot, designImg, uiImg, tolerance }) 
   if (imageOnly) hints.push("Image-only source: findings are pixel regions named after the design nodes there. A web URL, pen-probe or a native source gives element-level findings.");
   if (snapshot.truncated) hints.push("The page has more elements than were captured; verify a narrower state or screen.");
   for (const e of snapshot.pageErrors ?? []) hints.push(`Page error while loading: ${e}`);
-  return { summary, findings, notCompared, hints, scale: ui.s };
+  // The matched pairs, for the sync record (not part of the report).
+  const pairs = [...matched.pairs].map(([id, p]) => [id, p.el]);
+  return { summary, findings, notCompared, hints, scale: ui.s, pairs };
 }

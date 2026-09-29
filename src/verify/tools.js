@@ -14,6 +14,15 @@ import { contactSheet, findingCrops, renderReport, sheetRow } from "./report.js"
 import { pointFindingsAtCode } from "./code.js";
 import { USAGE_SNIPPET, designEdits, editLines, propertyNumbers } from "./reverse.js";
 import { nextStep } from "../guide.js";
+import { buildRecord, diffText, factsDiff, frameDiff, readRecord, recordPath, syncState, writeRecord } from "../sync/index.js";
+import { primaryFill } from "../design/inspect.js";
+
+/** A frame's own background as a color string, when it is one. */
+const frameFill = (root) => {
+  const p = primaryFill(root.fill, root.resolved?.fill);
+  return p?.kind === "color" ? p.resolved ?? p.raw : undefined;
+};
+export { frameFill };
 import { projectMapping } from "../mapping/index.js";
 
 const OUT_DIR = "design-verify";
@@ -268,7 +277,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       }
       const designImg = readPng(designPng);
       const uiImg = snapshot.screenshot && fs.existsSync(snapshot.screenshot) ? readPng(snapshot.screenshot) : null;
-      const result = verifyScreen({ design: d, snapshot, designImg, uiImg, tolerance });
+      const { pairs, ...result } = verifyScreen({ design: d, snapshot, designImg, uiImg, tolerance });
       // Point findings at the code (markers) and name the design tokens they concern.
       const mapping = projectMapping({ penFile: target.file, conv: conventions(target.file), variables: model.variables, themes: model.themes });
       const where = pointFindingsAtCode(result.findings, { model, d, snapshot, mapping });
@@ -292,6 +301,31 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       try {
         previousHash = JSON.parse(fs.readFileSync(files.report, "utf8")).pen?.sha1 ?? null;
       } catch {}
+      // Sync record: written on MATCH; on DIFFERS, what changed on each side since the last one.
+      const frameInfo = { id, name: model.root.name ?? id, width: d.frame.w, theme: frameTheme ?? rootTheme ?? null, fill: frameFill(model.root) };
+      const syncFile = recordPath(target.file, frameInfo);
+      const prior = readRecord(syncFile);
+      const current = buildRecord({ penFile: target.file, penSha: penHash, frame: frameInfo, design: d, pairs, fields: snapshot.fields ?? [], source: snapshot.request ?? null });
+      let sync = null;
+      if (result.summary.verdict === "match") {
+        writeRecord(syncFile, current);
+        sync = { recorded: path.relative(process.cwd(), syncFile) };
+      } else if (prior) {
+        const designDiff = factsDiff(prior.nodes, current.nodes, "design");
+        const codeDiff = factsDiff(prior.nodes, current.nodes, "ui");
+        const touched = (x) => [...x.added, ...x.removed, ...x.changed.map((c) => c.address)];
+        const dz = touched(designDiff), cz = touched(codeDiff);
+        // The frame's own fill counts as a design change, but tags no finding (every address is under the frame).
+        const frameChange = frameDiff(prior.frame, current.frame);
+        designDiff.changed.unshift(...frameChange);
+        const hits = (list, a) => list.some((x) => a === x || a.startsWith(`${x}/`) || x.startsWith(`${a}/`));
+        for (const f of result.findings) {
+          if (!f.address) continue;
+          const inD = hits(dz, f.address), inC = hits(cz, f.address);
+          f.since = inD && inC ? "both" : inD ? "design" : inC ? "code" : undefined;
+        }
+        sync = { state: syncState({ record: prior, designChanged: dz.length + frameChange.length > 0, codeChanged: cz.length > 0 }), recordedAt: prior.verifiedAt, design: diffText(designDiff), code: diffText(codeDiff) };
+      }
       fs.writeFileSync(
         files.report,
         JSON.stringify(
@@ -302,6 +336,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
             source: snapshot.request ?? null,
             uiWidth: snapshot.viewport?.w,
             ...result,
+            sync,
             files,
             meta,
           },
@@ -325,7 +360,12 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       repeats.set(`${target.file}|${id}`, { sig, count });
       if (count >= 3 && result.summary.verdict !== "match") reportLines.push("", `Note: verify returned the same findings ${count} times in a row. Check that the page shows your change (route, state, dev server reloaded, the right file), or change approach.`);
       const others = picked?.row ? Object.values(picked.row.cells).flat().map((c) => c.id).filter((x) => x !== id) : [];
-      reportLines.push("", nextStep({ state: result.summary.verdict === "match" ? "match" : "differs", id, direction, others }));
+      if (sync?.recorded) reportLines.push("", `Recorded as the last match in ${sync.recorded} (commit it with the code, so every agent and machine knows where design and code stand).`);
+      if (sync?.state) {
+        reportLines.push("", `## Since the last match (${sync.recordedAt})`, `- Design: ${sync.design || "no change"}`, `- Code: ${sync.code || "no change"}`);
+      }
+      const syncNext = sync?.state && direction !== "code-to-design" && ["design-changed", "code-changed", "both-changed"].includes(sync.state) ? sync.state : null;
+      reportLines.push("", nextStep({ state: syncNext ?? (result.summary.verdict === "match" ? "match" : "differs"), id, direction, others }));
       const res = design.wrap(target, reportLines);
       if (uiImg && crops > 0) {
         for (const { finding, image } of findingCrops({ designImg, uiImg, frame: d.frame, findings: result.findings, uiWidth: snapshot.viewport?.w, n: crops })) {

@@ -393,8 +393,31 @@ test("code-to-design: proposed edits for clear causes; applied to a copy of the 
 test("verify ends with Next:, and notes the same findings coming back three times", async () => {
   let t;
   for (let i = 0; i < 3; i++) t = text(await verify({ source: { kind: "web", url: url("drift.html") }, crops: 0 }));
-  assert.match(t, /Next: fix the high findings first/);
+  // An earlier MATCH recorded this frame, so the drift is known to be on the code side.
+  assert.match(t, /Next: if the design should follow the code, verify\(\{ target: "\w+", direction: "code-to-design" \}\); if the code drifted by mistake, fix the code/);
   assert.match(t, /Note: verify returned the same findings \d+ times in a row/);
   const ok = text(await verify({ source: { kind: "web", url: url("faithful.html") }, crops: 0 }));
   assert.match(ok, /Next: this frame is done/);
+});
+
+test("sync: MATCH records the pair; later, verify says which side changed and asks when both did", async () => {
+  await call(client, "save", { filePath: file });
+  const copy = path.join(dir, "synced.pen");
+  fs.copyFileSync(file, copy);
+  const v = (page) => call(client, "verify", { filePath: copy, target: "Checkout · light", source: { kind: "web", url: url(page) }, crops: 0 });
+  const first = text(await v("faithful.html"));
+  assert.match(first, /Recorded as the last match in design-sync\/Checkout-light-390-light-[0-9a-f]{6}\.json/);
+  const rec = JSON.parse(fs.readFileSync(path.join(dir, /Recorded as the last match in (\S+) /.exec(first)[1]), "utf8"));
+  assert.ok(rec.nodes["Checkout · light/Header/Title"].ui.text.match(/^[0-9a-f]{12}$/), "UI text hashed");
+  // The designer renames the total; the code drifts (red title, bigger total, no tab bar...).
+  const totalId = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: copy, input: `Print("N", JSON.stringify(Get((n) => n.name === "Total" ? n.id : undefined).filter(Boolean)))` })))[1])[0];
+  await call(client, "execute", { filePath: copy, input: `Update(${JSON.stringify(totalId)}, { content: "Total 99.00" })` });
+  await call(client, "save", { filePath: copy });
+  const t = text(await v("drift.html"));
+  assert.match(t, /## Since the last match/);
+  assert.match(t, /- Design: .*~ Checkout · light\/Content\/Summary\/Total text "Total 42.00" → "Total 99.00"/);
+  assert.match(t, /- Code: .*Checkout · light\/Header\/Title fg/);
+  assert.match(t, /text color: .*\(code changed since the last match\)/);
+  assert.match(t, /Next: stop and ask the user which side wins/);
+  assert.ok(fs.readFileSync(path.join(dir, /Recorded as the last match in (\S+) /.exec(first)[1]), "utf8") === JSON.stringify(rec, null, 1) + "\n", "DIFFERS never overwrites the record");
 });

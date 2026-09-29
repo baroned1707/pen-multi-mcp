@@ -54,7 +54,7 @@ export function buildRecord({ penFile, penSha, frame, design, pairs, fields = []
   return {
     note: "Written by pen-multi verify on MATCH; derived data — after a merge conflict, run verify again to regenerate it.",
     version: 1,
-    frame: sorted({ id: frame.id, name: frame.name, width: r1(frame.width), theme: frame.theme }),
+    frame: sorted({ id: frame.id, name: frame.name, width: r1(frame.width), theme: frame.theme, fill: hex(frame.fill) }),
     pen: sorted({ path: path.basename(penFile), sha1: penSha }),
     code: gitState(root),
     source: src,
@@ -99,7 +99,9 @@ const same = (k, a, b, tol) => {
  * from, to }] }. `side` picks design or ui facts; changes within compare's tolerances are none.
  */
 export function factsDiff(before, after, side, tolerance = {}) {
-  const tol = { ...DEFAULT_TOLERANCE, ...tolerance, position: side === "design" ? 0.5 : (tolerance.position ?? DEFAULT_TOLERANCE.position) };
+  // The design is exact data: any change counts. The UI is a capture: compare's tolerances apply.
+  const EXACT = { position: 0.5, color: 0.5, fontSize: 0.01, fontWeight: 1, lineHeight: 0.01, radius: 0.01 };
+  const tol = side === "design" ? EXACT : { ...DEFAULT_TOLERANCE, ...tolerance };
   const added = [], removed = [], changed = [];
   for (const [address, n] of Object.entries(after)) {
     const was = before[address]?.[side];
@@ -114,7 +116,19 @@ export function factsDiff(before, after, side, tolerance = {}) {
     }
   }
   for (const [address, n] of Object.entries(before)) if (n[side] && !after[address]?.[side]) removed.push(address);
-  return { added, removed, changed };
+  // A whole subtree added or removed is its outermost node; content changes before moves.
+  const outermost = (list) => list.filter((a) => !list.some((p) => p !== a && a.startsWith(`${p}/`)));
+  const rank = (c) => (c.prop === "box" ? 1 : 0);
+  return { added: outermost(added), removed: outermost(removed), changed: changed.sort((a, b) => rank(a) - rank(b)) };
+}
+
+/** The frame's own fill (its background), which is not one of the compared nodes. */
+export function frameDiff(before, after) {
+  const was = before?.fill, now = after?.fill;
+  if (was === now || (!was && !now)) return [];
+  const ca = parseColor(was), cb = parseColor(now);
+  if (ca && cb && deltaE(ca, cb) <= 0.5) return []; // design data is exact
+  return [{ address: after?.name ?? before?.name, prop: "fill", from: was, to: now }];
 }
 
 /** Files of the code changed since the record's commit (working tree included), or null when unknown. */

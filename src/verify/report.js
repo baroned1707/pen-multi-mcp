@@ -19,7 +19,8 @@ export function renderReport({ meta, summary, findings, notCompared = [], files 
     for (const f of list) {
       if (shown >= maxLines) break;
       const token = f.token ? ` Design token ${f.token.design}${f.token.code ? ` = ${f.token.code} in code` : ""}.` : "";
-      lines.push(`${f.n}. [${f.severity}] ${f.message}${token}${f.code ? ` → ${f.code}` : ""}`);
+      const since = f.since ? ` (${f.since === "both" ? "both sides changed" : `${f.since} changed`} since the last match)` : "";
+      lines.push(`${f.n}. [${f.severity}] ${f.message}${token}${f.code ? ` → ${f.code}` : ""}${since}`);
       shown++;
     }
   }

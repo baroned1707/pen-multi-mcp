@@ -9,6 +9,10 @@ import { colorTokens } from "../lint/rules.js";
 import { readPng } from "../verify/image.js";
 import { USAGE_SNIPPET, propertyNumbers } from "../verify/reverse.js";
 import { nextStep } from "../guide.js";
+import { projectMapping } from "../mapping/index.js";
+import { designNodes } from "../verify/design.js";
+import { SYNC_DIR, buildRecord, codeFilesChanged, diffText, factsDiff, frameDiff, readRecord, syncState } from "../sync/index.js";
+import { frameFill } from "../verify/tools.js";
 import { slug } from "../verify/tools.js";
 import { buildSpecs, imageCropper, safeName, snippets, tokenOrHex } from "./build.js";
 
@@ -171,8 +175,8 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
   tool(
     "sync_status",
     "Use when you need to know where design and code stand, screen by screen, and what to run next. Where design and code stand: every screen × width × theme of the document with its route (from .pen-multi.json routes), its last verify verdict and age, and whether the design changed since (stale). Lists what to verify next.",
-    { filePath: optionalFilePath, maxLines: z.number().int().min(10).max(2000).optional().describe("Rows listed (default 200).") },
-    async ({ filePath: f, maxLines = 200 }) => {
+    { filePath: optionalFilePath, maxLines: z.number().int().min(10).max(2000).optional().describe("Rows listed (default 200)."), maxReads: z.number().int().min(0).max(200).optional().describe("Frames whose design changed are read again to list what changed (default 20).") },
+    async ({ filePath: f, maxLines = 200, maxReads = 20 }) => {
       const target = await route(f);
       const { analysis } = await design.analysisOf(target);
       const conv = conventions(target.file);
@@ -188,34 +192,75 @@ export function registerImportTools({ tool, z, route, design, executeSnippet, op
           if (r?.target?.id && r.pen?.path === target.file && (!reports.has(r.target.id) || reports.get(r.target.id).generatedAt < r.generatedAt)) reports.set(r.target.id, r);
         } catch {}
       }
+      // Sync records (design-sync/ next to the .pen): the last MATCH of each frame.
+      const records = new Map();
+      const syncDir = path.join(path.dirname(target.file), SYNC_DIR);
+      for (const n of fs.existsSync(syncDir) ? fs.readdirSync(syncDir) : []) {
+        const rec = n.endsWith(".json") ? readRecord(path.join(syncDir, n)) : null;
+        if (rec?.frame?.id) records.set(rec.frame.id, rec);
+      }
+      const mapping = records.size ? projectMapping({ penFile: target.file, conv, variables: {}, themes: {} }) : null;
+      let reads = 0;
       const rows = [];
       for (const row of analysis.matrix.rows) {
         for (const [w, cells] of Object.entries(row.cells)) {
           for (const c of cells) {
             const r = reports.get(c.id);
             const routeFor = [c.name, row.screen, row.code].map((k) => conv.routes?.[k]).find(Boolean);
-            // Open in the app, the document may have unsaved edits: freshness is unknown there.
-            const stale = r && (!current || !r.pen?.sha1 ? null : r.pen.sha1 !== current);
-            const tag = stale === null && r ? " (freshness unknown)" : stale ? " (stale)" : "";
-            rows.push({ c, row, w, r, route: routeFor, stale, state: !r ? "never" : `${r.summary.verdict === "match" ? "match" : "differs"}${tag}` });
+            const rec = records.get(c.id);
+            let state, changes = "";
+            if (rec) {
+              // Design side: an unchanged .pen is proof; otherwise read the frame again (bounded).
+              let designChanged = false, designText = "";
+              if (!current || rec.pen?.sha1 !== current) {
+                if (reads < maxReads) {
+                  reads++;
+                  const model = buildModel(await readSubtree(design.reader(target), c.id));
+                  const now = buildRecord({ penFile: target.file, penSha: current, frame: rec.frame, design: designNodes(model), pairs: [] });
+                  const dd = factsDiff(rec.nodes, now.nodes, "design");
+                  dd.changed.unshift(...frameDiff(rec.frame, { name: rec.frame.name, fill: frameFill(model.root) }));
+                  designChanged = dd.added.length + dd.removed.length + dd.changed.length > 0;
+                  designText = diffText(dd, 4);
+                } else designText = "not read (maxReads)";
+              }
+              // Code side: the files carrying this frame's markers, changed since the record's commit.
+              const files = [...new Set(Object.entries(rec.nodes).map(([address, n]) => mapping?.locate({ id: n.id, address, name: address.split("/").pop() })?.file).filter(Boolean))];
+              const changedFiles = codeFilesChanged(rec, files);
+              const codeChanged = Boolean(changedFiles?.length);
+              state = syncState({ record: rec, designChanged, codeChanged });
+              changes = [designChanged && `design: ${designText}`, codeChanged && `code: ${changedFiles.join(", ")}`, changedFiles === null && "code: not checked (no markers, or the recorded commit is not in this history) — verify checks it"].filter(Boolean).join(" · ");
+            } else {
+              // No record yet (verified before sync records existed, or never matched).
+              const stale = r && current && r.pen?.sha1 && r.pen.sha1 !== current;
+              state = !r ? "never" : r.summary.verdict === "match" ? (stale ? "match (stale)" : "match") : "differs";
+            }
+            rows.push({ c, row, w, r, route: routeFor, state, changes });
           }
         }
       }
       const count = (s) => rows.filter((x) => x.state === s).length;
+      const STATES = ["in-sync", "design-changed", "code-changed", "both-changed", "match", "match (stale)", "differs", "never"];
       const lines = [
         `# sync status: ${rows.length} screen frames`,
-        `match ${rows.filter((x) => x.state.startsWith("match")).length} · differs ${rows.filter((x) => x.state.startsWith("differs")).length} · stale ${rows.filter((x) => x.stale).length} · never verified ${count("never")} · with a route ${rows.filter((x) => x.route).length}${target.mode === "app" ? " · open in the app: save it for stale detection" : ""}`,
+        STATES.filter((s) => count(s)).map((s) => `${s} ${count(s)}`).join(" · "),
         "",
-        "screen | state | width | theme | route | last verify",
+        "screen | state | width | theme | route | last verify | changed since the last match",
       ];
       for (const x of rows.slice(0, maxLines)) {
-        lines.push(`${x.row.screen}${x.row.state ? ` — ${x.row.state}` : ""} | ${x.state} | ${x.w} | ${x.c.theme ?? "–"} | ${x.route ?? "–"} | ${x.r ? `${x.r.summary.high} high, ${x.r.summary.medium} medium, ${ago(x.r.generatedAt)}` : "–"}`);
+        lines.push(`${x.row.screen}${x.row.state ? ` — ${x.row.state}` : ""} | ${x.state} | ${x.w} | ${x.c.theme ?? "–"} | ${x.route ?? "–"} | ${x.r ? `${x.r.summary.high} high, ${x.r.summary.medium} medium, ${ago(x.r.generatedAt)}` : "–"} | ${x.changes || "–"}`);
       }
       if (rows.length > maxLines) lines.push(`… ${rows.length - maxLines} more rows.`);
-      const next = rows.filter((x) => x.route && (x.state === "never" || x.stale || x.state === "differs")).slice(0, 8);
+      // What to run next, most urgent first: conflicts, then either side changed, then unchecked.
+      const order = ["both-changed", "design-changed", "code-changed", "differs", "match (stale)", "never"];
+      const next = rows.filter((x) => order.includes(x.state) && (x.route || x.state === "both-changed")).sort((a, b) => order.indexOf(a.state) - order.indexOf(b.state)).slice(0, 8);
       if (next.length) {
-        lines.push("", "## Verify next");
-        for (const x of next) lines.push(`- verify({ target: ${JSON.stringify(x.c.id)}, source: { kind: "web" } })  // ${x.c.name}: ${x.state}`);
+        lines.push("", "## Next");
+        for (const x of next) {
+          const v = (extra = "") => `verify({ target: ${JSON.stringify(x.c.id)}, source: { kind: "web" }${extra} })`;
+          if (x.state === "both-changed") lines.push(`- ask the user which side wins for ${x.c.name} (${x.changes}) — do not overwrite either side`);
+          else if (x.state === "code-changed") lines.push(`- ${v(', direction: "code-to-design"')}  // ${x.c.name}: code changed — if the design should follow; else fix the code and verify`);
+          else lines.push(`- ${v()}  // ${x.c.name}: ${x.state}`);
+        }
       }
       if (!Object.keys(conv.routes ?? {}).length) lines.push("", 'No routes: add { "baseUrl": "http://localhost:5173", "routes": { "<screen>": "/path" } } to .pen-multi.json next to the .pen so verify can find each screen\'s page.');
       return design.wrap(target, lines);
