@@ -355,7 +355,10 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
           const inD = hits(dz, f.address), inC = hits(cz, f.address);
           f.since = inD && inC ? "both" : inD ? "design" : inC ? "code" : undefined;
         }
-        const overlap = dz.some((a) => hits(cz, a));
+        // A conflict is both sides editing the same node on purpose. Moves and resizes are how a
+        // layout change elsewhere shows up (a larger gap shifts everything below it), not edits.
+        const intended = (x) => [...x.added, ...x.removed, ...x.changed.filter((c) => c.prop !== "box").map((c) => c.address)];
+        const overlap = intended(designDiff).some((a) => hits(intended(codeDiff), a));
         sync = { state: syncState({ record: prior, designChanged: dz.length + frameChange.length > 0, codeChanged: cz.length > 0, overlap }), recordedAt: prior.verifiedAt, design: diffText(designDiff), code: diffText(codeDiff) };
       }
       fs.writeFileSync(

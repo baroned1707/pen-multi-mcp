@@ -459,3 +459,19 @@ test("sync: both sides changed in different places is 'diverged' — carry each 
   assert.match(t, /- Code: .*Total fontSize/);
   assert.match(t, /Next: both sides changed, in different places — carry each change to the other side/);
 });
+
+test("sync: a layout change on one side that shifts a node edited on the other is not a conflict", async () => {
+  await call(client, "save", { filePath: file });
+  const copy = path.join(dir, "shifted.pen");
+  fs.copyFileSync(file, copy);
+  const faithful = fs.readFileSync(path.join(dir, "faithful.html"), "utf8");
+  // The code changes the total's text; the design pads the summary more (which moves the total).
+  fs.writeFileSync(path.join(dir, "retext.html"), faithful.replace("</body>", `<script>addEventListener("DOMContentLoaded", () => { document.querySelector('[data-pen="Total"]').textContent = "Total 99.00"; });</script></body>`));
+  const v = (page) => call(client, "verify", { filePath: copy, target: "Checkout · light", source: { kind: "web", url: url(page) }, crops: 0 });
+  assert.match(text(await v("faithful.html")), /Recorded as the last match/);
+  const summaryId = JSON.parse(/N (.*)/.exec(text(await call(client, "execute", { filePath: copy, input: `Print("N", JSON.stringify(Get((n) => n.name === "Summary" ? n.id : undefined).filter(Boolean)))` })))[1])[0];
+  await call(client, "execute", { filePath: copy, input: `Update(${JSON.stringify(summaryId)}, { padding: 24, height: 96 })` });
+  await call(client, "save", { filePath: copy });
+  const t = text(await v("retext.html"));
+  assert.match(t, /Next: both sides changed, in different places/, t.split("## Since")[1]?.slice(0, 600));
+});
