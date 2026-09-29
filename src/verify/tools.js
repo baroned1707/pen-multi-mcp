@@ -15,6 +15,7 @@ import { verifyScreen } from "./pipeline.js";
 import { contactSheet, findingCrops, renderReport, sheetRow } from "./report.js";
 import { pointFindingsAtCode } from "./code.js";
 import { USAGE_SNIPPET, designEdits, editLines, propertyNumbers } from "./reverse.js";
+import { layoutEdits } from "./layout.js";
 import { nextStep } from "../guide.js";
 import { annotate } from "../calllog.js";
 import { buildRecord, diffText, factsDiff, frameDiff, readRecord, recordPath, syncState, writeRecord } from "../sync/index.js";
@@ -385,7 +386,9 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         const s = result.scale ?? 1;
         const elements = (snapshot.elements ?? []).map((e) => ({ ...e, box: e.box && { x: e.box.x * s, y: e.box.y * s, w: e.box.w * s, h: e.box.h * s } }));
         const usage = await run(USAGE_SNIPPET);
-        const edits = designEdits(result.findings, { model, theme: frameTheme ?? rootTheme ?? null, elements, numbers: propertyNumbers(model.variables, usage.text) });
+        const numbers = propertyNumbers(model.variables, usage.text);
+        const layout = layoutEdits(model, new Map(pairs), { spacing: numbers.spacing });
+        const edits = designEdits(result.findings, { model, theme: frameTheme ?? rootTheme ?? null, elements, numbers, layout });
         reportLines = [...reportLines, ...editLines(edits, { designChanged: Boolean(previousHash && penHash && previousHash !== penHash) })];
       }
       // The same findings again and again: the fixes are not landing where verify looks.
