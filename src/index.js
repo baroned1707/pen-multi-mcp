@@ -23,6 +23,8 @@ import { conventions } from "./design/tools.js";
 import { cliVersion } from "./shell.js";
 import { registerDesignTools } from "./design/tools.js";
 import { registerPrompts } from "./prompts.js";
+import { registerDoctorTool } from "./doctor/tools.js";
+import { SNAPSHOT_SCHEMA } from "./snapshot/schema.js";
 
 const timings = new Timings();
 const saver = new SaveScheduler({
@@ -56,6 +58,7 @@ Design ↔ code — which tool, when:
 - A screen that exists only in code: import_ui, then verify the new frame.
 - The code changed and the design should follow: verify with direction "code-to-design", apply the proposed edits you agree with (execute), verify again.
 - Where design and code stand, screen by screen: sync_status.
+- Setting up a project, or something is reported missing (routes, markers, tokens): doctor.
 - Before porting: lint the screen (fix: ["names", "tokens"]) and keep tokens in sync with the code's token file (tokens compare).
 
 Rules for both directions:
@@ -71,8 +74,9 @@ Many agents and projects:
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "1.3.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "1.4.0" }, { instructions: INSTRUCTIONS });
 registerPrompts(server, z);
+server.registerResource("snapshot-schema", "pen-multi://snapshot-schema", { title: "UI snapshot schema v1", description: "What a file or command source must write for verify, import_ui and sync.", mimeType: "application/json" }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(SNAPSHOT_SCHEMA, null, 1) }] }));
 
 const filePath = z
   .string()
@@ -605,6 +609,7 @@ registerLintTools({ tool, z, route, design: designTools, executeSnippet, optiona
 const portTools = registerPortTools({ tool, z, route, design: designTools, optionalFilePath, conventions, withMachineLock, saver, stateFor: verifyTools.stateFor });
 verifyHooks.onVerify = portTools.onVerify;
 registerImportTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath, capture: verifyTools.capture, source: verifyTools.source, conventions, saver });
+registerDoctorTool({ tool, z, route, design: designTools, conventions, optionalFilePath });
 
 let shuttingDown = false;
 async function shutdown() {

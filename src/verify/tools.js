@@ -1,12 +1,14 @@
 // capture, verify and contact_sheet: compare a design screen with the running UI on any platform.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { buildModel } from "../design/model.js";
 import { ReadError, readSubtree } from "../design/read.js";
 import { captureNative } from "./adapters/native.js";
 import { captureProbe } from "./adapters/probe.js";
 import { captureWeb } from "./adapters/web.js";
+import { SourceError, captureCommand, captureFile } from "./adapters/command.js";
 import { designNodes } from "./design.js";
 import { pngBuffer, readPng, resize, writePng } from "./image.js";
 import { verifyScreen } from "./pipeline.js";
@@ -104,7 +106,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
   }
   const source = z
     .object({
-      kind: z.enum(["web", "probe", "native", "image"]).describe("web: a URL in headless Chromium; probe: a React Native/Expo dev build running <PenProbe>; native: any Android/iOS app via uiautomator/maestro; image: a screenshot file."),
+      kind: z.enum(["web", "probe", "native", "image", "file", "command"]).describe("web: a URL in headless Chromium; probe: a React Native/Expo dev build running <PenProbe>; native: any Android/iOS app via uiautomator/maestro; image: a screenshot file; file: a snapshot JSON written by any tool (schema: resource pen-multi://snapshot-schema); command: a trusted project command that writes one (any platform: Flutter, desktop, …)."),
       url: z.string().optional().describe("web: the page to load (the agent starts the dev server). verify can omit it when .pen-multi.json maps the screen to a route."),
       steps: z.array(z.record(z.string(), z.any())).optional().describe('web: actions before capturing, e.g. [{ "click": "text=Login" }, { "fill": ["#email", "a@b.c"] }, { "waitFor": ".list" }, { "wait": 500 }, { "press": "Enter" }, { "eval": "..." }].'),
       fullPage: z.boolean().optional().describe("web: capture the whole scrolling page (default true)."),
@@ -128,12 +130,30 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       deepLink: z.string().optional().describe("probe/native: open this URL in the app first."),
       settleMs: z.number().int().min(0).max(60_000).optional().describe("probe/native: wait after the deep link (default 2000)."),
       timeoutMs: z.number().int().min(1000).max(120_000).optional().describe("probe: how long to wait for the app's snapshot (default 20000)."),
-      path: z.string().optional().describe("image: PNG screenshot path."),
+      path: z.string().optional().describe("image: PNG screenshot path; file: snapshot JSON path."),
+      run: z.string().optional().describe('command: the shell command. It gets PEN_SNAPSHOT_OUT, PEN_SCREENSHOT_OUT, PEN_WIDTH, PEN_HEIGHT, PEN_THEME, PEN_TARGET, PEN_STATE and writes the snapshot there. Runs only if the user trusted it for this project (the error says how).'),
+      cwd: z.string().optional().describe("command: folder to run it in (default: the working directory)."),
       width: z.number().positive().optional().describe("image: the screenshot's logical width (e.g. 390 for a 1170 px iPhone shot)."),
     })
     .describe("Where the implemented UI comes from.");
 
   /** Captures a source into design-verify/captures/<name>.{json,png}. */
+  // Source errors (a bad snapshot, an untrusted command) are the agent's to fix, not crashes.
+  const wrapSource = (fn) => {
+    try {
+      return fn();
+    } catch (err) {
+      throw err instanceof SourceError ? new ReadError(err.message) : err;
+    }
+  };
+  const wrapSourceAsync = async (fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      throw err instanceof SourceError ? new ReadError(err.message) : err;
+    }
+  };
+
   async function capture(src, { width, height, colorScheme, name, savePath }) {
     const base = savePath ? path.resolve(process.cwd(), savePath).replace(/\.(json|png)$/i, "") : path.join(process.cwd(), OUT_DIR, "captures", name);
     // At a path the caller chose, only a previous capture may be replaced, never an unrelated JSON
@@ -155,6 +175,15 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
     } else if (src.kind === "native") {
       // One capture per device at a time: dumps and screenshots of two agents must not interleave.
       ({ snapshot } = await withMachineLock(`device:${src.platform}:${src.device ?? "default"}`, () => captureNative({ ...src, screenshotPath })));
+    } else if (src.kind === "file") {
+      if (!src.path) throw new ReadError("source.path is required for kind file");
+      snapshot = wrapSource(() => captureFile(src)).snapshot;
+      if (snapshot.screenshot && fs.existsSync(snapshot.screenshot)) fs.copyFileSync(snapshot.screenshot, screenshotPath), (snapshot.screenshot = screenshotPath);
+    } else if (src.kind === "command") {
+      if (!src.run) throw new ReadError("source.run is required for kind command");
+      const home = process.env.PEN_MULTI_HOME ?? path.join(os.homedir(), ".pen-multi");
+      snapshot = (await wrapSourceAsync(() => captureCommand(src, { home, width, height, theme: colorScheme, target: name, state: src.state, out: `${base}-command` }))).snapshot;
+      if (snapshot.screenshot && fs.existsSync(snapshot.screenshot) && snapshot.screenshot !== screenshotPath) fs.copyFileSync(snapshot.screenshot, screenshotPath), (snapshot.screenshot = screenshotPath);
     } else {
       if (!src.path) throw new ReadError("source.path is required for kind image");
       const file = path.resolve(process.cwd(), src.path);

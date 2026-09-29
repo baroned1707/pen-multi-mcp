@@ -421,3 +421,23 @@ test("sync: MATCH records the pair; later, verify says which side changed and as
   assert.match(t, /Next: stop and ask the user which side wins/);
   assert.ok(fs.readFileSync(path.join(dir, /Recorded as the last match in (\S+) /.exec(first)[1]), "utf8") === JSON.stringify(rec, null, 1) + "\n", "DIFFERS never overwrites the record");
 });
+
+test("any-platform sources: a snapshot file or a trusted command verifies like a built-in adapter; built-in snapshots follow the schema", async () => {
+  const { validateSnapshot, SNAPSHOT_SCHEMA } = await import("../src/snapshot/schema.js");
+  const cap = text(await call(client, "capture", { source: { kind: "web", url: url("faithful.html") }, width: 390, height: 844, savePath: "ext/snap.json" }));
+  assert.ok(!/error/i.test(cap.split("\n")[0]), cap);
+  const snap = JSON.parse(fs.readFileSync(path.join(dir, "ext", "snap.json"), "utf8"));
+  assert.deepEqual(validateSnapshot(snap), [], "the web adapter's snapshot follows the schema");
+  const viaFile = text(await verify({ source: { kind: "file", path: "ext/snap.json" }, crops: 0 }));
+  assert.match(viaFile, /Verdict: MATCH/);
+  const run = `cp ext/snap.json "$PEN_SNAPSHOT_OUT"`;
+  const refused = await verify({ source: { kind: "command", run }, crops: 0 });
+  assert.equal(refused.isError, true);
+  assert.match(text(refused), /off for untrusted commands/);
+  execFileSync(process.execPath, [new URL("../bin/pen-multi.js", import.meta.url).pathname, "trust", dir, run], { env: { ...process.env, PEN_MULTI_HOME: path.join(dir, "home") } });
+  const viaCommand = text(await verify({ source: { kind: "command", run }, crops: 0 }));
+  assert.match(viaCommand, /Verdict: MATCH/, viaCommand.slice(0, 600));
+  const res = await client.readResource({ uri: "pen-multi://snapshot-schema" });
+  assert.deepEqual(JSON.parse(res.contents[0].text), SNAPSHOT_SCHEMA);
+  assert.deepEqual(JSON.parse(fs.readFileSync(new URL("../docs/snapshot-schema.json", import.meta.url), "utf8")), SNAPSHOT_SCHEMA, "docs/snapshot-schema.json is current");
+});

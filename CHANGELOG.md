@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.0 — 2026-09-29
+
+Design ↔ code sync, any-platform sources, doctor, and agents that use the tools well (spec: `docs/superpowers/specs/2026-09-29-sync-and-guidance-design.md`).
+
+- **Sync records**: verify MATCH writes `design-sync/<frame>.json` (commit it); verify on DIFFERS says which side changed since, tags findings, and asks the user when both did; `sync_status` has per-frame states and next calls.
+- **Any platform**: `source.kind` `file` and `command` with a published snapshot schema (`pen-multi://snapshot-schema`); commands run only when the user trusts them (`bin/pen-multi.js trust`, stored outside every repository).
+- **doctor** checks a project's setup for both directions and says how to fix each item.
+- **Guidance**: tool descriptions start with when to use them; the server instructions are a decision table; one `Next:` line from the frame's state ends every result; `Note:` reminders; MCP prompts `port-design`, `design-from-code`, `sync-check`.
+- **Eval** scores how agents work (inspect before editing, markers, the side they edit, conflicts reported) from their tool calls, with a both-changed task.
+
 ## 1.3.0 — 2026-09-28
 
 Context that lets agents port correctly, in both directions (spec: `docs/superpowers/specs/2026-09-28-agent-context-design.md`).
