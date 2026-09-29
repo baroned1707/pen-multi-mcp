@@ -185,6 +185,17 @@ The Claude Code skill `skills/pen-port` (copy it to `~/.claude/skills/pen-port`)
 
 `tokens` turns the design's variables into code — `css` (custom properties per theme, with `.dark` and `prefers-color-scheme`), `tailwind`, W3C `json`, or a typed `react-native` object — and with `compare` lists the tokens a code file is missing, has changed, or has extra.
 
+## Observability: how pen-multi performs in real use
+
+Every tool call appends one event to `~/.pen-multi/events/<day>.jsonl`, shared by all pen-multi processes on the machine: the tool, the project and `.pen` (names and hashes only), milliseconds per step, the outcome, result tokens (text and images), for verify the verdict, finding kinds, direction and sync state, the `Next:` it suggested and whether the following call took it. Never arguments, texts or code. Kept 30 days, at most 20 MB a day; `PEN_MULTI_EVENTS=0` turns it off.
+
+```sh
+node bin/pen-multi.js report              # last 7 days, all projects
+node bin/pen-multi.js report --days 30 --project shop --json
+```
+
+The report shows calls, errors, p50 / p95 latency and the dominant step per tool, result tokens, verify runs until MATCH and frames that never got there, the most frequent findings, how often agents followed `Next:`, reminders, and time spent waiting for other agents on the pen.dev app. `npm run eval` attaches the same numbers to each agent run.
+
 ## Many agents, many projects
 
 Each Claude Code session starts its own `pen-multi-mcp` process, with the session's project as its working directory. Subagents share their parent's process.

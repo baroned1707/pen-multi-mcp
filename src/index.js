@@ -15,6 +15,7 @@ import { carryImages, readPrinted, snippets } from "./transfer.js";
 import { FileLock, SessionPool, config, normalize, withMachineLock } from "./pool.js";
 import { prewarm } from "./prewarm.js";
 import { current as currentCall, recentSlow, recordIfSlow, withCall } from "./calllog.js";
+import { buildEvent, recordEvent } from "./events.js";
 import { registerVerifyTools } from "./verify/tools.js";
 import { registerLintTools } from "./lint/tools.js";
 import { registerImportTools } from "./import/tools.js";
@@ -74,7 +75,7 @@ Many agents and projects:
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "1.4.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "1.5.0" }, { instructions: INSTRUCTIONS });
 registerPrompts(server, z);
 server.registerResource("snapshot-schema", "pen-multi://snapshot-schema", { title: "UI snapshot schema v1", description: "What a file or command source must write for verify, import_ui and sync.", mimeType: "application/json" }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(SNAPSHOT_SCHEMA, null, 1) }] }));
 
@@ -220,6 +221,7 @@ const tool = (name, description, schema, handler) =>
       // Slow calls are logged with where the time went; waiting behind other agents is said so.
       const ctx = currentCall();
       const slow = ctx && recordIfSlow(config.home, ctx, { error: Boolean(res?.isError) });
+      if (ctx) recordEvent(config.home, buildEvent({ ctx, args, res, totalMs: performance.now() - ctx.started }));
       if (slow && slow.appOthers > 0 && Array.isArray(res?.content)) {
         res = { ...res, content: [...res.content, { type: "text", text: `NOTE: this took ${(slow.totalMs / 1000).toFixed(1)} s: ${slow.appOthers} other agent call(s) were using the pen.dev app at the same time, and the app runs one at a time.` }] };
       }

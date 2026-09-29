@@ -7,6 +7,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { parseStream, score } from "./behavior.mjs";
+import { readEvents } from "../../src/events.js";
+import { summarize } from "../../src/report.js";
 import { check, workspace } from "./lib.mjs";
 import { TASKS } from "./tasks.mjs";
 
@@ -41,7 +43,11 @@ for (const server of servers) {
       const out = stream.result ?? {};
       const behavior = score(TASKS[task], stream, { before, after: snap(), page: path.basename(w.page) });
       const verdict = await check(w, servers[0]); // one judge for every side
-      const row = { server, task, i, match: verdict.match, verdict: verdict.summary, turns: out.num_turns, tokens: (out.usage?.input_tokens ?? 0) + (out.usage?.output_tokens ?? 0) + (out.usage?.cache_read_input_tokens ?? 0), costUsd: out.total_cost_usd, behavior, error: r.status ? (r.stderr || "").slice(0, 300) : undefined };
+      // What the MCP itself did in this run, from its events (servers that write them).
+      const events = readEvents(path.join(w.dir, "home-agent"), { days: 1 }).events;
+      const ev = summarize(events);
+      const mcpStats = ev.calls ? { calls: Object.fromEntries(ev.tools.map((t) => [t.tool, t.calls])), ms: events.reduce((sum, e) => sum + e.ms, 0), tokens: events.reduce((sum, e) => sum + (e.tokens?.text ?? 0) + (e.tokens?.image ?? 0), 0), errors: ev.tools.reduce((sum, t) => sum + t.errors, 0), nextFollowed: ev.next.judged ? `${ev.next.followed}/${ev.next.judged}` : null } : null;
+      const row = { server, task, i, match: verdict.match, verdict: verdict.summary, turns: out.num_turns, tokens: (out.usage?.input_tokens ?? 0) + (out.usage?.output_tokens ?? 0) + (out.usage?.cache_read_input_tokens ?? 0), costUsd: out.total_cost_usd, behavior, mcp: mcpStats, error: r.status ? (r.stderr || "").slice(0, 300) : undefined };
       results.push(row);
       console.log(JSON.stringify(row));
       fs.rmSync(w.dir, { recursive: true, force: true });
