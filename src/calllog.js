@@ -10,7 +10,13 @@ export const SLOW_MS = Number(process.env.PEN_MULTI_SLOW_MS ?? 3000);
 const MAX_BYTES = 1_000_000;
 
 /** Runs fn with a fresh call context. */
-export const withCall = (tool, fn) => store.run({ tool, started: performance.now(), marks: {}, appOthers: 0 }, fn);
+export const withCall = (tool, fn) => store.run({ tool, started: performance.now(), marks: {}, appOthers: 0, meta: {} }, fn);
+
+/** Adds structured facts about the current call (verdict, next step…) for its event. */
+export function annotate(facts) {
+  const ctx = store.getStore();
+  if (ctx) Object.assign(ctx.meta, facts);
+}
 export const current = () => store.getStore();
 
 /** Adds ms to the current call's `step`. */

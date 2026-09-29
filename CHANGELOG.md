@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.0 — 2026-09-29
+
+- **Observability** (spec: `docs/superpowers/specs/2026-09-29-observability-design.md`): one event per tool call in `~/.pen-multi/events/` (measurements only — no arguments, texts or code; 30 days, 20 MB a day, `PEN_MULTI_EVENTS=0` to turn off), and `node bin/pen-multi.js report` for latency, errors, tokens, verify runs until MATCH, finding kinds, Next: followed, reminders and app waits. The eval attaches each run's MCP numbers.
+
 ## 1.4.0 — 2026-09-29
 
 Design ↔ code sync, any-platform sources, doctor, and agents that use the tools well (spec: `docs/superpowers/specs/2026-09-29-sync-and-guidance-design.md`).

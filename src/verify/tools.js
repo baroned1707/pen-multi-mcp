@@ -16,6 +16,7 @@ import { contactSheet, findingCrops, renderReport, sheetRow } from "./report.js"
 import { pointFindingsAtCode } from "./code.js";
 import { USAGE_SNIPPET, designEdits, editLines, propertyNumbers } from "./reverse.js";
 import { nextStep } from "../guide.js";
+import { annotate } from "../calllog.js";
 import { buildRecord, diffText, factsDiff, frameDiff, readRecord, recordPath, syncState, writeRecord } from "../sync/index.js";
 import { primaryFill } from "../design/inspect.js";
 
@@ -394,6 +395,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       if (sync?.state) {
         reportLines.push("", `## Since the last match (${sync.recordedAt})`, `- Design: ${sync.design || "no change"}`, `- Code: ${sync.code || "no change"}`);
       }
+      annotate({ verify: { verdict: result.summary.verdict, high: result.summary.high, medium: result.summary.medium, direction, frame: id, sync: sync?.state ?? (sync?.recorded ? "recorded" : undefined), kinds: [...new Set(result.findings.filter((x) => x.severity !== "low").map((x) => x.kind))] } });
       const syncNext = sync?.state && direction !== "code-to-design" && ["design-changed", "code-changed", "both-changed", "diverged"].includes(sync.state) ? sync.state : null;
       reportLines.push("", nextStep({ state: syncNext ?? (result.summary.verdict === "match" ? "match" : "differs"), id, direction, others }));
       const res = design.wrap(target, reportLines);

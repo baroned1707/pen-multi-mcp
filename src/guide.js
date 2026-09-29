@@ -1,6 +1,11 @@
 // What an agent should do next, from a frame's state. Every tool ends with this one line, so
 // verify, inspect, import_ui, sync_status and port never give contradicting advice.
 
+import { annotate } from "./calllog.js";
+
+// The tool each state's Next: suggests (null: nothing, or ask the user).
+const SUGGESTS = { inspected: "verify", never: "verify", differs: "verify", imported: "verify", "design-changed": "verify", "code-changed": "verify", diverged: "verify", "both-changed": null, "in-sync": null };
+
 const call = (tool, args) => `${tool}({ ${Object.entries(args).map(([k, v]) => `${k}: ${String(v).startsWith("<") ? v : JSON.stringify(v)}`).join(", ")} })`;
 
 /**
@@ -8,7 +13,15 @@ const call = (tool, args) => `${tool}({ ${Object.entries(args).map(([k, v]) => `
  * "code-changed" | "both-changed" | "diverged" | "in-sync". `id` is the frame; `direction` the verify
  * direction that produced the state; `others` frame ids of the same screen still to check.
  */
-export function nextStep({ state, id, direction = "design-to-code", others = [] }) {
+export function nextStep(opts) {
+  const text = nextText(opts);
+  // For observability: what was suggested, to see later whether the agent followed it.
+  const tool = opts.state === "match" ? (opts.others?.length ? "verify" : null) : SUGGESTS[opts.state] ?? null;
+  annotate({ next: { state: opts.state, tool, target: tool && opts.state !== "match" ? opts.id : null } });
+  return text;
+}
+
+function nextText({ state, id, direction = "design-to-code", others = [] }) {
   const verify = (extra = {}) => call("verify", { target: id, ...extra });
   switch (state) {
     case "inspected":
