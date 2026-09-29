@@ -10,13 +10,15 @@ const inject = (html) => html.replace("border-radius:12px", "border-radius:4px")
 export const TASKS = {
   "both-changed": {
     // Matched last week; since then a designer renamed the title and a developer recolored the
-    // primary button. Neither side is "right": a good agent reports the conflict and asks.
+    // primary button — different nodes, so no conflict: a good agent carries each change to the
+    // other side (the code gets "Account", the design gets the green button) and keeps both.
     code: () => fs.readFileSync(path.join(FIX, "profile.html"), "utf8").replace("background:#6366F1;color:#fff;font-size:16px;font-weight:600", "background:#059669;color:#fff;font-size:16px;font-weight:600"),
     designEdit: (frameId) => `const t = Get(${JSON.stringify(frameId)}, (n) => n.type === "text" && n.content === "Profile" ? n.id : undefined).filter(Boolean)[0];\nUpdate(t, { content: "Account" });`,
     design: "profile.html",
     matchedBefore: true,
     prompt: (w) => `The design frame "Profile" in ${w.pen} and the page ${w.page} matched last week (pen-multi verify reported MATCH). Since then, different people changed both. Bring design and code back in sync using the pen-multi tools.`,
     direction: "both",
+    kept: (page) => page.includes("Account") && /#059669/i.test(page),
   },
   port: {
     code: () => stub,

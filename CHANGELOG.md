@@ -8,7 +8,8 @@ Design ↔ code sync, any-platform sources, doctor, and agents that use the tool
 - **Any platform**: `source.kind` `file` and `command` with a published snapshot schema (`pen-multi://snapshot-schema`); commands run only when the user trusts them (`bin/pen-multi.js trust`, stored outside every repository).
 - **doctor** checks a project's setup for both directions and says how to fix each item.
 - **Guidance**: tool descriptions start with when to use them; the server instructions are a decision table; one `Next:` line from the frame's state ends every result; `Note:` reminders; MCP prompts `port-design`, `design-from-code`, `sync-check`.
-- **Eval** scores how agents work (inspect before editing, markers, the side they edit, conflicts reported) from their tool calls, with a both-changed task.
+- **Eval** scores how agents work (inspect before editing, markers, the side they edit, both changes kept) from their tool calls, with a both-changed task that starts from a recorded, committed MATCH.
+- Measured with real agents (`bench/results/eval-2026-09-29.json`, n = 1 per cell, indicative only): every run reached MATCH on 1.3.0 and 1.4.0, and no run edited the wrong side. Code → design improved: both sides changed 411k → 210k tokens (1.4.0 used direction code-to-design and kept both edits), design update 422k → 257k. Design → code within the noise: port 209k → 261k, fix 114k → 162k (the same task measured 121k on 1.3.0 the day before).
 
 ## 1.3.0 — 2026-09-28
 

@@ -38,8 +38,8 @@ export function score(task, { calls, result }, { before, after, page }) {
     verifyRuns: verifies.length,
     usedCodeToDesign: verifies.some((c) => c.input.direction === "code-to-design"),
     wrongSide: (wantCode && designChanged) || (wantDesign && codeChanged) || false,
-    bothOverwritten: task.direction === "both" ? codeChanged && designChanged : undefined,
-    conflictReported: task.direction === "both" ? /conflict|both (sides|changed)|which (side|one|version)|should (i|we) (keep|follow)|\?/i.test(result?.result ?? "") : undefined,
+    // Both sides changed in different places: both changes must survive, carried across.
+    keptBoth: task.kept ? task.kept(after.page) && designChanged : undefined,
     toolCalls: calls.length,
     finalText: String(result?.result ?? "").slice(0, 300),
   };
