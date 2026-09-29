@@ -378,7 +378,8 @@ test("code-to-design: proposed edits for clear causes; applied to a copy of the 
   assert.match(t, /Update\("\w+", \{"fontSize":24\}\) {2}\/\/ the code's font size/);
   assert.match(t, /Update\("\w+", \{"enabled":false\}\) {2}\/\/ the code no longer shows it — hidden, not deleted/);
   assert.match(t, /Insert\("\w+", \{"type":"text","name":"Old promo banner","content":"Old promo banner"/);
-  assert.match(t, /No edit proposed for: .*layout: the cause \(gap, padding, order, sizing\) is not clear/);
+  // The reordered sections are a container edit now (Move), not an unexplained layout finding.
+  assert.match(t, /Move\("\w+", "\w+", 0\)/);
   assert.doesNotMatch(t, /Fix the high findings first/);
   const ops = [...t.matchAll(/^\d+\. ((?:Update|Insert)\(.*\))  \/\//gm)].map((m) => m[1]);
   const applied = await call(client, "execute", { filePath: copy, input: ops.join("\n") });
@@ -458,4 +459,20 @@ test("sync: both sides changed in different places is 'diverged' — carry each 
   assert.match(t, /- Design: .*Title text "Checkout" → "Pay"/);
   assert.match(t, /- Code: .*Total fontSize/);
   assert.match(t, /Next: both sides changed, in different places — carry each change to the other side/);
+});
+
+test("code-to-design infers layout: the UI's gap and order become container edits that bring the design to MATCH", async () => {
+  await call(client, "save", { filePath: file });
+  const copy = path.join(dir, "layout.pen");
+  fs.copyFileSync(file, copy);
+  const faithful = fs.readFileSync(path.join(dir, "faithful.html"), "utf8");
+  fs.writeFileSync(path.join(dir, "relaid.html"), faithful.replace("</body>", `<script>addEventListener("DOMContentLoaded", () => { const q = (m) => document.querySelector('[data-pen="' + m + '"]'); q("Content").style.gap = "24px"; q("Summary").before(q("Items")); });</script></body>`));
+  const src = { kind: "web", url: url("relaid.html") };
+  const t = text(await call(client, "verify", { filePath: copy, target: "Checkout · light", source: src, direction: "code-to-design", crops: 0 }));
+  assert.match(t, /Move\("\w+", "\w+", 0\); Move\("\w+", "\w+", 1\)/, t.split("## Proposed")[1]?.slice(0, 800));
+  const ops = [...t.matchAll(/^[\d·]+\. ((?:Update|Insert|Move)\(.*?\))  \/\//gm)].map((m) => m[1]);
+  assert.ok(ops.some((o) => /gap: 24/.test(o)), "order and gap in one pass");
+  await call(client, "execute", { filePath: copy, input: ops.join("\n") });
+  const done = text(await call(client, "verify", { filePath: copy, target: "Checkout · light", source: src, crops: 0 }));
+  assert.match(done, /Verdict: MATCH/, done.split("\n").filter((l) => /\[(high|medium)\]/.test(l)).join("\n"));
 });
