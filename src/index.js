@@ -59,6 +59,8 @@ Design ↔ code — which tool, when:
 - Implement many screens: port (plan once, then next → inspect → implement → verify → done; never stop while next hands out work). The port-design prompt walks through it.
 - A screen that exists only in code: import_ui, then verify the new frame.
 - The code changed and the design should follow: verify with direction "code-to-design", apply the proposed edits you agree with (execute), verify again.
+- A screen at all its widths, and between them: verify with matrix: true (every width × theme in one call) and between: true (web: the page at the widths between the designed ones — sideways scrolling, cut or overlapping text).
+- A component state the design draws ("Button — hover"): verify it on the element with source.element; the hover, focus or pressed step is added for you. lint rule "states" lists the states the design does not draw.
 - Where design and code stand, screen by screen: sync_status.
 - Setting up a project, or something is reported missing (routes, markers, tokens): doctor.
 - Before designing a new screen or changing the design: project_context — the product's brief (who it is for, voice, visual direction, rules), the design system as it is now, and what changed since the brief was written.
@@ -77,7 +79,7 @@ Many agents and projects:
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "1.8.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "1.9.0" }, { instructions: INSTRUCTIONS });
 registerPrompts(server, z);
 server.registerResource("snapshot-schema", "pen-multi://snapshot-schema", { title: "UI snapshot schema v1", description: "What a file or command source must write for verify, import_ui and sync.", mimeType: "application/json" }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(SNAPSHOT_SCHEMA, null, 1) }] }));
 

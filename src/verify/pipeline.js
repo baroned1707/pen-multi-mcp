@@ -1,6 +1,7 @@
 // The comparison pipeline without I/O: scale the snapshot into design units, match, compare,
 // add pixel regions, number the findings, and summarize.
-import { compare, sortFindings, summarize } from "./compare.js";
+import { compare, DEFAULT_TOLERANCE, sortFindings, summarize } from "./compare.js";
+import { deltaE, flatten, parseColor, toHex } from "./color.js";
 import { match } from "./match.js";
 import { resize } from "./image.js";
 import { boxDiffers, nodesAt, pixelRegions } from "./visual.js";
@@ -17,6 +18,35 @@ export function toDesignUnits(snapshot) {
 }
 
 /**
+ * The UI is one element (source.element) and the design a component: the frame's own fill and
+ * corner radius are the element's background and radius (a hover or pressed look is usually just
+ * these).
+ */
+export function elementFindings(design, snapshot, tolerance = {}) {
+  const tol = { ...DEFAULT_TOLERANCE, ...tolerance };
+  const out = [];
+  const f = design.frame;
+  const el = snapshot.element;
+  const at = { x: 0, y: 0, w: f.w, h: f.h };
+  const white = { r: 255, g: 255, b: 255, a: 1 };
+  const want = parseColor(f.fill);
+  if (want && want.a > 0) {
+    const got = parseColor(el.bg);
+    const under = flatten(parseColor(snapshot.page?.pageBg) ?? white, white);
+    const shown = got && got.a > 0 ? flatten(got, under) : null;
+    const d = shown ? deltaE(flatten(want, white), shown) : Infinity;
+    // Both are exact values (the design's and the computed style), not sampled pixels: a hover
+    // shade one step darker (ΔE ≈ 9) must count, so the tolerance is tight unless one is given.
+    if (d > (tolerance.color ?? 2.5)) out.push({ severity: "high", group: "Color", kind: "fill", designId: f.id, address: f.name, box: at, ui: shown ? toHex(shown) : "none", message: `fill: ${shown ? toHex(shown) : "none"} on the element (${el.selector}), ${toHex(want)} in the design${Number.isFinite(d) ? ` (ΔE ${Math.round(d)})` : ""} — ${f.name} (${f.id}).` });
+  }
+  if (f.radius !== undefined) {
+    const wantR = Math.min(f.radius, f.w / 2, f.h / 2), gotR = Math.min(el.radius ?? 0, el.box.w / 2, el.box.h / 2);
+    if (Math.abs(gotR - wantR) > tol.radius) out.push({ severity: "medium", group: "Layout", kind: "radius", designId: f.id, address: f.name, box: at, ui: gotR, message: `corner radius: ${Math.round(gotR * 10) / 10} on the element (${el.selector}), ${Math.round(wantR * 10) / 10} in the design — ${f.name} (${f.id}).` });
+  }
+  return out;
+}
+
+/**
  * Compares a design screen (from designNodes) with a UI snapshot. `designImg`/`uiImg` (decoded
  * PNGs) add pixel regions when both are given.
  */
@@ -28,6 +58,8 @@ export function verifyScreen({ design, snapshot, designImg, uiImg, tolerance }) 
     ? { pairs: new Map(), unmatchedDesign: [], unmatchedUi: [], markerMisses: [] }
     : match(design, ui);
   const findings = imageOnly ? [] : compare(design, ui, matched, { tolerance, fields, viewportW: ui.viewportW, viewportH: snapshot.viewport?.h });
+  const own = snapshot.element ? elementFindings(design, snapshot, tolerance) : [];
+  findings.push(...own);
 
   if (designImg && uiImg) {
     // Texts already compared as elements are skipped: anti-aliasing differs between renderers.
@@ -74,7 +106,8 @@ export function verifyScreen({ design, snapshot, designImg, uiImg, tolerance }) 
         return w > 0 && h > 0 && (w * h) / (b.w * b.h) >= 0.3 && flagged.has(id);
       });
     };
-    const unexplained = imageOnly ? named : named.filter((x) => !x.nodes.some((n) => flagged.has(n.id)) && !movedHere(x.r));
+    // A region on no node of a component whose own fill or radius differs: that finding explains it.
+    const unexplained = imageOnly ? named : named.filter((x) => !x.nodes.some((n) => flagged.has(n.id)) && !movedHere(x.r) && !(own.length && !x.nodes.length));
     const explained = named.length - unexplained.length;
     const LIST = 15;
     for (const { r, nodes } of unexplained.slice(0, LIST)) {

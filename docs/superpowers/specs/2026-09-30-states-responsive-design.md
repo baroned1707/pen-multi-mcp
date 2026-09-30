@@ -23,7 +23,7 @@ any .pen):
    - text cut: a text element whose content overflows a hidden-overflow box (no ellipsis), or is
      cut by ellipsis or line clamp;
    - overlapping text: two text boxes that cover each other (not overlays: fixed, sticky, absolute);
-   - touch targets under 24×24 (WCAG 2.5.8) below 600 px, for buttons, links outside text, inputs;
+   - touch targets under 24×24 (WCAG 2.5.8) below 1024 px (touch devices), for buttons, links outside text, inputs;
    - structure: the texts of the nearest design frame that the page no longer shows.
    Findings are listed per width; the verdict of the between checks is OK or PROBLEMS.
    Other source kinds: skipped with a note (they cannot capture at an arbitrary width).
