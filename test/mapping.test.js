@@ -92,3 +92,22 @@ test("locate: a marker in several files resolves to the file preferred for this 
   assert.equal(locate(node, idx, { prefer: new Map([["web/Settings.tsx", 5]]) }).file, "web/Settings.tsx");
   assert.equal(locate(node, idx, { prefer: new Map([["web/Home.tsx", 5]]) }).file, "web/Home.tsx");
 });
+
+test("components: a marker found in several places marks usages, not the definition — not mapped", () => {
+  write("web/Risk.tsx", `export function Risk() {\n  return <div data-pen="C/Row">a</div>;\n}\n`);
+  write("web/Other.tsx", `export function Other() {\n  return <div data-pen="C/Row">b</div>;\n}\n`);
+  const idx = scanMarkers(dir);
+  const m = componentMap([{ id: "R1", name: "C/Row", instances: 9 }], idx, {}, dir);
+  assert.equal(m.get("R1"), undefined);
+  assert.equal(m.unmapped[0].usages, 2);
+});
+
+test("components: a name-only marker inside unrelated code is not a mapping; an id marker is", () => {
+  write("web/Risk2.tsx", `export function Risk() {\n  return <div data-pen="C/Cell">a</div>;\n}\n`);
+  write("web/PriceCell.tsx", `export function PriceCell() {\n  return <div data-pen="Q9">a</div>;\n}\n`);
+  const idx = scanMarkers(dir);
+  const m = componentMap([{ id: "C1", name: "C/Cell", instances: 4 }, { id: "Q9", name: "C/Whatever", instances: 2 }], idx, {}, dir);
+  assert.equal(m.get("C1"), undefined);
+  assert.equal(m.unmapped[0].near, "Risk");
+  assert.equal(m.get("Q9").code, "PriceCell", "by id: proof");
+});

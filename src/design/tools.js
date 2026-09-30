@@ -28,7 +28,7 @@ export function conventions(file) {
     const doc = JSON.parse(fs.readFileSync(path.resolve(path.dirname(p), f), "utf8"));
     flowEdges.push(...(doc.edges ?? []));
   }
-  return { screenPattern: conf.screenPattern, flowEdges, baseUrl: conf.baseUrl, routes: conf.routes ?? {}, states: conf.states ?? {}, tokens: conf.tokens, components: conf.components };
+  return { screenPattern: conf.screenPattern, flowEdges, baseUrl: conf.baseUrl, routes: conf.routes ?? {}, states: conf.states ?? {}, tokens: conf.tokens, components: conf.components, brief: conf.brief };
 }
 
 const fileHash = (file) => (fs.existsSync(file) ? createHash("sha1").update(fs.readFileSync(file)).digest("hex") : null);
@@ -311,7 +311,7 @@ export function registerDesignTools({ tool, z, route, app, pool, saver, timings,
     if (used.size) {
       lines.push(`- Components: ${mapped.length} of ${used.size} used here map to code${mapped.length ? `: ${mapped.map(([id, c]) => `${used.get(id)?.name} → ${c.code} (${c.file}${c.line ? `:${c.line}` : ""})`).join(", ")}` : ""}.`);
       for (const [id, c] of m.components) if (c.problem) lines.push(`- ${used.get(id)?.name}: .pen-multi.json components entry — ${c.problem}.`);
-      if (m.components.unmapped.length) lines.push(`- Not mapped: ${m.components.unmapped.map((c) => `${c.name} ×${c.instances} (id ${c.id})`).join(", ")}. If the code has it, mark its definition with data-pen="<id>" (or testID/Key "pen:<id>"), or add .pen-multi.json { "components": { "<id>": { "code": "Name", "file": "path" } } }; else build it once and reuse it.`);
+      if (m.components.unmapped.length) lines.push(`- Not mapped: ${m.components.unmapped.map((c) => `${c.name} ×${c.instances} (id ${c.id}${c.usages > 1 ? `; its name marks ${c.usages} places in the code — usages, not the definition` : c.near ? `; a marker with its name sits in ${c.near}, which is not this component` : ""})`).join(", ")}. If the code has it, mark its definition with data-pen="<id>" (or testID/Key "pen:<id>"), or add .pen-multi.json { "components": { "<id>": { "code": "Name", "file": "path" } } }; else build it once and reuse it.`);
     } else lines.push("- No component instances here.");
     if (m.tokens.size) lines.push(`- Tokens are shown under their code names (${m.tokens.size} mapped${m.tokens.ambiguous.length ? `; ambiguous, shown as design tokens: ${m.tokens.ambiguous.map((a) => `${a.token} = ${a.candidates.join(" or ")}`).join(", ")}` : ""}).`);
     else lines.push('- Tokens are shown as design variables: add .pen-multi.json { "tokens": { "file": "<the code\'s token file>" } } to see the code\'s names (matched by name, then by a unique value).');

@@ -16,7 +16,7 @@ after(async () => {
 test("the server lists the design ↔ code prompts and fills in the file and screen", async () => {
   client = await connect({ home: path.join(dir, "home"), cwd: dir, env: { PEN_MULTI_PREWARM: "0" } });
   const { prompts } = await client.listPrompts();
-  assert.deepEqual(prompts.map((p) => p.name).sort(), ["design-from-code", "port-design", "sync-check"]);
+  assert.deepEqual(prompts.map((p) => p.name).sort(), ["design-from-code", "port-design", "refresh-brief", "sync-check", "write-brief"]);
   const p = await client.getPrompt({ name: "port-design", arguments: { filePath: "app.pen", screen: "Checkout" } });
   const t = p.messages[0].content.text;
   assert.match(t, /# pen-port: implement a design until it matches/);

@@ -9,6 +9,8 @@ export const PROMPTS = {
   "port-design": "Implement a .pen design in the app's code, screen by screen, until every screen verifies as MATCH.",
   "design-from-code": "Bring the .pen design up to what the code shows: import screens that exist only in code, update the others from verify's proposed edits.",
   "sync-check": "Report where design and code stand, screen by screen, and what each side needs.",
+  "write-brief": "Write the project's design brief (product, voice, visual direction, rules) from its own documents, for the user to approve.",
+  "refresh-brief": "Update the design brief for what changed in the project since it was written.",
 };
 
 export function registerPrompts(server, z) {

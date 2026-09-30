@@ -25,6 +25,7 @@ import { cliVersion } from "./shell.js";
 import { registerDesignTools } from "./design/tools.js";
 import { registerPrompts } from "./prompts.js";
 import { registerDoctorTool } from "./doctor/tools.js";
+import { registerContextTools } from "./context/tools.js";
 import { SNAPSHOT_SCHEMA } from "./snapshot/schema.js";
 
 const timings = new Timings();
@@ -60,6 +61,7 @@ Design ↔ code — which tool, when:
 - The code changed and the design should follow: verify with direction "code-to-design", apply the proposed edits you agree with (execute), verify again.
 - Where design and code stand, screen by screen: sync_status.
 - Setting up a project, or something is reported missing (routes, markers, tokens): doctor.
+- Before designing a new screen or changing the design: project_context — the product's brief (who it is for, voice, visual direction, rules), the design system as it is now, and what changed since the brief was written.
 - Before porting: lint the screen (fix: ["names", "tokens"]) and keep tokens in sync with the code's token file (tokens compare).
 
 Rules for both directions:
@@ -75,7 +77,7 @@ Many agents and projects:
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "1.7.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "1.8.0" }, { instructions: INSTRUCTIONS });
 registerPrompts(server, z);
 server.registerResource("snapshot-schema", "pen-multi://snapshot-schema", { title: "UI snapshot schema v1", description: "What a file or command source must write for verify, import_ui and sync.", mimeType: "application/json" }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(SNAPSHOT_SCHEMA, null, 1) }] }));
 
@@ -209,6 +211,8 @@ async function routeUntimed(f, { needsApp = false, tool: toolName, write = false
   return { mode: "app", file };
 }
 
+const ATTACH_BRIEF = new Set(["overview", "inspect", "execute", "import_ui", "lint"]);
+let contextTools = null; // set once the design tools exist
 const tool = (name, description, schema, handler) =>
   server.registerTool(name, { description, inputSchema: schema }, (args) =>
     withCall(name, async () => {
@@ -218,8 +222,13 @@ const tool = (name, description, schema, handler) =>
       } catch (err) {
         res = fail(err.message);
       }
-      // Slow calls are logged with where the time went; waiting behind other agents is said so.
       const ctx = currentCall();
+      // The project's brief, once per file, with the first design-tool result.
+      if (ATTACH_BRIEF.has(name) && !res?.isError && ctx?.file && contextTools && Array.isArray(res?.content)) {
+        const extra = await contextTools.attach(ctx.file);
+        if (extra) res = { ...res, content: [res.content[0], { type: "text", text: extra }, ...res.content.slice(1)] };
+      }
+      // Slow calls are logged with where the time went; waiting behind other agents is said so.
       const slow = ctx && recordIfSlow(config.home, ctx, { error: Boolean(res?.isError) });
       if (ctx) recordEvent(config.home, buildEvent({ ctx, args, res, totalMs: performance.now() - ctx.started }));
       if (slow && slow.appOthers > 0 && Array.isArray(res?.content)) {
@@ -612,6 +621,7 @@ const portTools = registerPortTools({ tool, z, route, design: designTools, optio
 verifyHooks.onVerify = portTools.onVerify;
 registerImportTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath, capture: verifyTools.capture, source: verifyTools.source, conventions, saver });
 registerDoctorTool({ tool, z, route, design: designTools, conventions, optionalFilePath });
+contextTools = registerContextTools({ tool, z, route, design: designTools, conventions, optionalFilePath, executeSnippet, withMachineLock });
 
 let shuttingDown = false;
 async function shutdown() {

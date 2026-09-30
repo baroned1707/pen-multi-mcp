@@ -162,9 +162,17 @@ export function componentMap(components, idx, overrides = {}, root = process.cwd
       out.set(c.id, entry);
       continue;
     }
-    const loc = idx.markers.get(c.id)?.[0] ?? idx.markers.get(c.name)?.[0];
-    if (loc) out.set(c.id, { code: declaredName(root, loc.file, loc.line) ?? path.basename(loc.file).replace(/\.[^.]+$/, ""), file: loc.file, line: loc.line, source: "marker" });
-    else out.unmapped.push(c);
+    // A definition carries the marker once. A marker found in several places sits where the
+    // component is used, and the code around one of them is not the component: do not guess.
+    const byId = idx.markers.get(c.id);
+    const locs = byId ?? idx.markers.get(c.name) ?? [];
+    const code = locs.length === 1 ? declaredName(root, locs[0].file, locs[0].line) ?? path.basename(locs[0].file).replace(/\.[^.]+$/, "") : null;
+    // A marker naming the component's id is proof. By name ("Row") it is a hint, taken only when the
+    // code declared there is related to that name (PriceRow for Row), not whatever encloses it.
+    const norm = (x) => String(x).split("/").pop().toLowerCase().replace(/[^a-z0-9]/g, "");
+    const related = byId || (code && norm(c.name) && (norm(code).includes(norm(c.name)) || norm(c.name).includes(norm(code))));
+    if (code && related) out.set(c.id, { code, file: locs[0].file, line: locs[0].line, source: "marker" });
+    else out.unmapped.push(locs.length ? { ...c, usages: locs.length, near: code ?? undefined } : c);
   }
   out.unmapped.sort((a, b) => (b.instances ?? 0) - (a.instances ?? 0) || a.name.localeCompare(b.name));
   return out;

@@ -6,6 +6,7 @@ import path from "node:path";
 import { stateHint } from "../design/overview.js";
 import { projectMapping } from "../mapping/index.js";
 import { SYNC_DIR } from "../sync/index.js";
+import { STAMP_FILE, briefConfig } from "../context/brief.js";
 
 const git = (args, cwd) => {
   try {
@@ -102,6 +103,11 @@ export function registerDoctorTool({ tool, z, route, design, conventions, option
       const probe = path.join(path.dirname(target.file), SYNC_DIR, "x.json");
       if (inGit && git(["check-ignore", "-q", probe], cwd) !== null) (problems++, bad(`${path.relative(cwd, path.dirname(probe))}/ is gitignored: sync records must be committed so every agent and machine knows where design and code stand.`));
       else if (inGit) ok(`Sync records go to ${path.relative(cwd, path.dirname(probe)) || SYNC_DIR}/ and are committed with the code.`);
+      // The brief: the product's intent for agents that design.
+      const brief = briefConfig(target.file, conv);
+      if (!fs.existsSync(brief.file)) warn(`No design brief at ${brief.rel}: agents design without the product's intent. Run the write-brief prompt.`);
+      else if (!fs.existsSync(path.join(path.dirname(target.file), SYNC_DIR, STAMP_FILE))) warn(`The brief ${brief.rel} was never stamped: project_context({ action: "stamp" }) once the user approved it.`);
+      else ok(`Design brief ${brief.rel} (project_context says whether it is out of date).`);
       lines.push(`ℹ️ Other platforms (Flutter, desktop, …): pass source { kind: "file" } or { kind: "command" } writing a snapshot per the resource pen-multi://snapshot-schema; a command runs only after the user trusts it.`);
 
       lines.push("", problems ? `Next: fix the ❌ items (${problems}), then run doctor again.` : "Next: sync_status for where design and code stand, or the port-design / design-from-code prompts.");
