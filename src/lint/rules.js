@@ -14,7 +14,7 @@ const words = (name) =>
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .split(/[\s/_\-·.:()]+/)
     .filter(Boolean);
-const tappableName = (name) => words(name).some((w) => TAPPABLE.test(w)) || /icon ?button/i.test(name ?? "");
+export const tappableName = (name) => words(name).some((w) => TAPPABLE.test(w)) || /icon ?button/i.test(name ?? "");
 const NOT_CONTENT = new Set(["note", "prompt", "context"]);
 
 const r1 = (v) => Math.round(v * 10) / 10;

@@ -19,6 +19,9 @@ import { layoutEdits } from "./layout.js";
 import { cropImage, cropSnapshot, stateStep } from "./element.js";
 import { betweenFindings, betweenWidths, nearestWidth } from "./responsive.js";
 import { normText } from "./match.js";
+import { briefCodeFindings } from "./brief.js";
+import { briefConfig } from "../context/brief.js";
+import { parseRules } from "../context/rules.js";
 import { INTERACTION_STEPS } from "./adapters/web.js";
 import { nextStep } from "../guide.js";
 import { annotate } from "../calllog.js";
@@ -433,6 +436,9 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         const edits = designEdits(result.findings, { model, theme: frameTheme ?? rootTheme ?? null, elements, numbers, layout });
         reportLines = [...reportLines, ...editLines(edits, { designChanged: Boolean(previousHash && penHash && previousHash !== penHash) })];
       }
+      // The brief's rules on what the code chose itself (never on values it shares with the design).
+      const briefLines = briefSection(target, snapshot, { pairs, design: d, variables: model.variables, theme: frameTheme ?? rootTheme ?? null });
+      if (briefLines.length) reportLines.push("", ...briefLines);
       // The same findings again and again: the fixes are not landing where verify looks.
       const sig = result.findings.filter((x) => x.severity !== "low").map((x) => `${x.kind}:${x.address ?? x.uiIndex}`).sort().join("|");
       const seen = repeats.get(`${target.file}|${id}`);
@@ -455,6 +461,16 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       }
       const worst = result.findings.find((x) => x.severity !== "low");
       return { lines: reportLines, images, info: { id, name: model.root.name ?? id, width: d.frame.w, theme: frameTheme ?? rootTheme ?? null, summary: result.summary, worst: worst ? `[${worst.severity}] ${worst.message}` : null, sync: sync?.state ?? (sync?.recorded ? "recorded" : null) } };
+  }
+
+  /** "## Brief rules" lines for a snapshot: the brief's pen-rules broken by the code (not part of the verdict). */
+  function briefSection(target, snapshot, opts) {
+    const brief = briefConfig(target.file, conventions(target.file));
+    if (!fs.existsSync(brief.file)) return [];
+    const { rules, errors } = parseRules(fs.readFileSync(brief.file, "utf8"));
+    const found = briefCodeFindings(snapshot, rules, opts);
+    const lines = [...errors.map((e) => `- WARNING: ${e}`), ...found];
+    return lines.length ? [`## Brief rules (${brief.rel}; not part of the verdict)`, ...lines] : [];
   }
 
   /** Every frame of the target's screen row, one verify each: a table, then the worst frame's report. */
@@ -510,6 +526,8 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
     let src = withState(target, args.target, frame, src0);
     if (!src.url) src = { ...src, url: routeUrl(target, args.target, frame) };
     const run = design.reader(target);
+    const v = await run(`const v = GetVariables(); Print("V", JSON.stringify(v.variables || {}))`);
+    const variables = JSON.parse(/V (.*)/.exec(v.text ?? "")?.[1] ?? "{}");
     let problems = 0;
     for (const m of mids) {
       const near = nearestWidth(cells.map((c) => c.width), m.width);
@@ -523,6 +541,8 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       const texts = drawn.filter((t) => shownNear.has(normText(t)));
       const { snapshot, snapshotPath } = await capture(src, { width: m.width, height: 900, colorScheme: colorSchemeOf(theme), name: slug(`${tag}-${m.width}`), probe: true });
       const found = betweenFindings(snapshot, { nearest: { name: cell.name, width: near, texts } });
+      // No design at this width: every rule the page breaks is listed (low: it does not fail the check).
+      for (const line of briefSection(target, snapshot, { variables, theme }).slice(1)) found.push({ severity: "low", kind: "brief", message: line.replace(/^- /, "") });
       problems += found.filter((x) => x.severity !== "low").length;
       L.push("", `### ${m.width} (between ${m.below} and ${m.above}; nearest design ${cell.name}) — ${found.filter((x) => x.severity !== "low").length ? "PROBLEMS" : "OK"}`);
       for (const x of found) L.push(`- [${x.severity}] ${x.kind}: ${x.message}`);
