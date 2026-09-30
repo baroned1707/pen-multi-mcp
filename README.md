@@ -157,6 +157,10 @@ Every `verify` MATCH records the pair in `design-sync/<frame>.json` next to the 
 
 Beyond web, pen-probe, native and screenshots, `verify`, `import_ui` and `port` take a snapshot from anything that can write one (a Flutter integration test, a desktop accessibility dump…): `source: { kind: "file", path }`, or `source: { kind: "command", run }`, which gets `PEN_SNAPSHOT_OUT`, `PEN_SCREENSHOT_OUT`, `PEN_WIDTH`, `PEN_HEIGHT`, `PEN_THEME`, `PEN_TARGET` and writes the snapshot there. The schema is the MCP resource `pen-multi://snapshot-schema` ([docs/snapshot-schema.json](docs/snapshot-schema.json)): only boxes are required, a source declares the rest in `fields`, and every file or command snapshot is validated. A command runs only once the user trusts it for the project — `node bin/pen-multi.js trust <project> "<command>"` — stored in `~/.pen-multi/trusted.json`, outside every repository (or with `PEN_MULTI_COMMANDS=1`).
 
+### Project context: `project_context`
+
+Agents design better when they know the product's intent. `project_context` returns the brief (the product, voice, visual direction and rules, written by an agent from the project's own documents with the `write-brief` prompt and approved by the user), the design system as it is now, canvas notes, and what changed in the project since the brief was stamped (sources, routes, code components, tokens, commits, files) — so an out-of-date brief is flagged and refreshed with `refresh-brief`. `.pen-multi.json` `{ "brief": { "file": "design/BRIEF.md", "sources": ["CLAUDE.md"] } }`; `project_context({ action: "stamp" })` records the approved brief and puts its outline on the canvas. The first design-tool result per file shows the brief's status.
+
 ### `doctor`, prompts, and `Next:`
 
 - `doctor` checks a project for design ↔ code work — git repository, routes that answer, states, screen naming, code markers and component mapping, the token file, sync records not gitignored — each with its fix; it changes nothing.

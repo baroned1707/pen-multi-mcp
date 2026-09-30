@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.0 — 2026-09-30
+
+Project context that stays current (spec: `docs/superpowers/specs/2026-09-30-project-context-design.md`).
+
+- **`project_context`**: the product's brief (an agent writes it from the project's own documents, the user approves it), the design system as it is now (tokens with their values per theme, type and spacing scales, most used components with their code, canvas notes), and what changed since the brief was stamped: sources, routes, code components, tokens, commits, files. The brief is flagged as possibly out of date when something structural changed.
+- `action: "stamp"` records what the approved brief was written against (`design-sync/brief-stamp.json`) and writes its outline on the canvas as a "Project brief" note (`note: false` skips it).
+- The first overview, inspect, execute, import_ui or lint result for a file carries the brief's status once. Prompts `write-brief` and `refresh-brief`; doctor warns about a missing or unstamped brief; the server instructions say to read the brief before designing.
+- **Mapping fix** (found on trading-agent): a component maps to code by a marker naming its id, or by its name only when that marker is in one place and the code there is related (PriceRow for Row). Markers on usages no longer map `Row` to `Risk` or `NavBar` to `HoldingsLayout`.
+
 ## 1.7.0 — 2026-09-29
 
 import_ui that looks drawn, not dumped (spec: `docs/superpowers/specs/2026-09-29-import-clean-design.md`). Measured on four trading-agent screens with `bench/eval/real/import-quality.mjs`:
