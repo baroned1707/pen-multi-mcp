@@ -7,6 +7,7 @@ import { renderOverview } from "../design/overview.js";
 import { projectMapping } from "../mapping/index.js";
 import { SYNC_DIR } from "../sync/index.js";
 import { STAMP_FILE, briefConfig, digestOf, sinceLines, sinceStamp, snapshotNow } from "./brief.js";
+import { parseRules, rulesLine } from "./rules.js";
 
 export function registerContextTools({ tool, z, route, design, conventions, optionalFilePath, executeSnippet, withMachineLock }) {
   const stampPath = (file) => path.join(path.dirname(file), SYNC_DIR, STAMP_FILE);
@@ -40,6 +41,10 @@ export function registerContextTools({ tool, z, route, design, conventions, opti
     L.push(`Brief: ${g.brief.rel}${g.stamp ? "" : " (never stamped: what changes it depends on is unknown)"}`);
     const text = detail === "full" ? g.briefText.split("\n").slice(0, 400) : digestOf(g.briefText);
     L.push(...text);
+    const { rules, errors, blocks } = parseRules(g.briefText);
+    if (blocks) L.push("", `Rules checked by lint (design) and verify (code): ${rulesLine(rules) || "none"}`);
+    for (const e of errors) L.push(`WARNING: ${e}`);
+    if (g.brief.references?.length) L.push(`References (read them with the brief): ${g.brief.references.join(", ")}`);
     if (g.since) {
       L.push("", ...sinceLines(g.stamp, g.since));
       if (g.since.stale) L.push("Next: the refresh-brief prompt — update the sections these changes touch, ask the user, then stamp again.");

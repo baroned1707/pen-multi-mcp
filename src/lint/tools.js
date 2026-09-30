@@ -3,6 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildModel } from "../design/model.js";
 import { ReadError, readSubtree } from "../design/read.js";
+import { lintBrief } from "./brief.js";
+import { briefConfig } from "../context/brief.js";
+import { parseRules } from "../context/rules.js";
 import { hasRepeated, lintScreen, lintStates, lintVariants, RULES } from "./rules.js";
 import { diffTokens, normalizeTokens, renderTokens } from "./tokens.js";
 import { readPng, sampleColors } from "../verify/image.js";
@@ -11,14 +14,14 @@ import os from "node:os";
 const SEVERITY = { high: 0, medium: 1, low: 2 };
 const FIXABLE = { names: "default-name", tokens: "raw-color" };
 
-export function registerLintTools({ tool, z, route, design, executeSnippet, optionalFilePath }) {
+export function registerLintTools({ tool, z, route, design, executeSnippet, optionalFilePath, conventions }) {
   tool(
     "lint",
-    `Use before porting a screen, or after editing the design: problems in the design that would become bugs in code, with safe fixes. Check a .pen design for what makes it hard to implement faithfully or to use: raw colors where a token exists, text contrast below WCAG AA, touch targets under 44×44 on phone screens, default layer names ("Frame 12"), off-scale font sizes and spacing, hidden or clipped leftovers, near-misaligned and unevenly spaced siblings in free layouts, engine-reported layout problems, screens missing a theme most screens have, and states the design does not draw (interactive components without hover/focus/pressed/disabled variants; list screens without empty, error and loading frames). Without target it checks the document's screens (up to maxScreens). fix: ["names", "tokens"] applies the unambiguous fixes (rename default-named layers after their text or component; replace a raw color with the one token that has exactly that value) and reports what it changed.`,
+    `Use before porting a screen, or after editing the design: problems in the design that would become bugs in code, with safe fixes. Check a .pen design for what makes it hard to implement faithfully or to use: raw colors where a token exists, text contrast below WCAG AA, touch targets under 44×44 on phone screens, default layer names ("Frame 12"), off-scale font sizes and spacing, hidden or clipped leftovers, near-misaligned and unevenly spaced siblings in free layouts, engine-reported layout problems, screens missing a theme most screens have, and states the design does not draw (interactive components without hover/focus/pressed/disabled variants; list screens without empty, error and loading frames), and the rules the brief states in numbers (rule "brief": its pen-rules blocks — type sizes, styles and fonts, targets, row heights, side margins, spacing, prominent actions, color roles). Without target it checks the document's screens (up to maxScreens). fix: ["names", "tokens"] applies the unambiguous fixes (rename default-named layers after their text or component; replace a raw color with the one token that has exactly that value) and reports what it changed.`,
     {
       filePath: optionalFilePath,
       target: z.string().optional().describe("One screen (name, code or node id). Omit for the whole document."),
-      rules: z.array(z.enum([...RULES, "variants", "states"])).optional().describe("Only these rules."),
+      rules: z.array(z.enum([...RULES, "variants", "states", "brief"])).optional().describe("Only these rules."),
       fix: z.array(z.enum(["names", "tokens"])).optional().describe("Apply these safe fixes."),
       maxScreens: z.number().int().min(1).max(200).optional().describe("Screens checked without target (default 12)."),
       maxLines: z.number().int().min(10).max(2000).optional().describe("Findings listed (default 150)."),
@@ -31,6 +34,9 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
       let ids;
       if (wanted) ids = [(await design.resolveTarget(target, wanted)).id];
       else ids = frames.slice(0, maxScreens).map((c) => c.id);
+      // The brief's pen-rules: the project's own guideline in numbers.
+      const brief = conventions ? briefConfig(target.file, conventions(target.file)) : null;
+      const briefRules = brief && fs.existsSync(brief.file) ? parseRules(fs.readFileSync(brief.file, "utf8")) : { rules: {}, errors: [] };
       const doc = { rareFontSizes: new Set(analysis.typeScale.offScale), rareSpacing: new Set(analysis.spacing.offScale) };
       const findings = [];
       const names = new Map();
@@ -55,6 +61,7 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
             const img = !res.error && fs.existsSync(png) ? readPng(png) : null;
             if (img) found = lintScreen(model, { ...doc, sampleBg: (box) => sampleColors(img, box, img.width / model.root.abs.w).bg ?? null });
           }
+          found.push(...lintBrief(model, briefRules.rules));
           for (const x of found) findings.push({ ...x, screen: model.root.name ?? id });
         }
       } finally {
@@ -98,6 +105,7 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
       const byRule = new Map();
       for (const x of shown) byRule.set(x.rule, (byRule.get(x.rule) ?? 0) + 1);
       if (byRule.size) lines.push(`By rule: ${[...byRule].map(([r, n]) => `${r} ${n}`).join(", ")}`);
+      for (const e of briefRules.errors) lines.push(`WARNING: ${brief.rel}: ${e}`);
       const fixable = shown.filter((x) => x.fix && !applied.has(`${x.id}|${x.rule}`));
       if (fixable.length) lines.push(`Safe fixes available for ${fixable.length}: pass fix ${JSON.stringify([...new Set(fixable.map((x) => Object.keys(FIXABLE).find((k) => FIXABLE[k] === x.rule)))])}.`);
       lines.push("");

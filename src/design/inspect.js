@@ -154,11 +154,14 @@ export function collapse(children) {
   return out;
 }
 
-// Whole words only: "Subheader", "Unavailable" and "Product tabs" are content, not app shell.
-const word = (alts) => new RegExp(`(^|[^\\p{L}\\p{N}])(${alts})([^\\p{L}\\p{N}]|$)`, "iu");
+// Whole words only: "Subheader", "Unavailable" and "Product tabs" are content, not app shell. A
+// number may follow ("TabBar5").
+const word = (alts) => new RegExp(`(^|[^\\p{L}\\p{N}])(${alts})([^\\p{L}]|$)`, "iu");
 const SHELL_NAME = word("header|footer|nav|navbar|navigation|tab ?bar|tabbar|toolbar|app ?bar|bottom ?bar|status ?bar|sidebar|side ?bar|nav ?rail|điều hướng|thanh tab|đầu trang|chân trang");
 // Words that mean shell only as the whole name ("Tabs", not "Product tabs").
-const SHELL_ALONE = /^(tabs|menu|bar|top|bottom|chân|đầu)$/i;
+const SHELL_ALONE = /^(tabs|menu|bar|top|bottom|rail|chân|đầu)$/i;
+/** A name that reads as app shell (header, tab bar, sidebar, rail…), wherever the node sits. */
+export const shellName = (name) => SHELL_NAME.test(name ?? "") || SHELL_ALONE.test((name ?? "").trim());
 const SCROLL_NAME = word("scroll|scroll ?view|content|body|main|cuộn|vùng cuộn|nội dung");
 const NOT_CONTENT = new Set(["note", "prompt", "context"]);
 
@@ -191,7 +194,7 @@ export function sections(model) {
   // A name alone is not enough: "Section header" in the middle of a page is content. A named
   // shell must also be the first or last child, or touch an edge.
   const atEnd = (c) => c === top[0] || c === top.at(-1) || edge(c) !== null;
-  const isShell = (c) => Boolean(pinned(c) || (atEnd(c) && (SHELL_NAME.test(c.name ?? "") || SHELL_ALONE.test((c.name ?? "").trim()))));
+  const isShell = (c) => Boolean(pinned(c) || (atEnd(c) && shellName(c.name)));
   const fixedHeight = typeof root.height === "number" || root.height === undefined;
   const candidates =
     rootLayout === "vertical" && fixedHeight

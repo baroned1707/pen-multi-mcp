@@ -7,6 +7,7 @@ import { stateHint } from "../design/overview.js";
 import { projectMapping } from "../mapping/index.js";
 import { SYNC_DIR } from "../sync/index.js";
 import { STAMP_FILE, briefConfig } from "../context/brief.js";
+import { parseRules, rulesLine } from "../context/rules.js";
 
 const git = (args, cwd) => {
   try {
@@ -108,6 +109,12 @@ export function registerDoctorTool({ tool, z, route, design, conventions, option
       if (!fs.existsSync(brief.file)) warn(`No design brief at ${brief.rel}: agents design without the product's intent. Run the write-brief prompt.`);
       else if (!fs.existsSync(path.join(path.dirname(target.file), SYNC_DIR, STAMP_FILE))) warn(`The brief ${brief.rel} was never stamped: project_context({ action: "stamp" }) once the user approved it.`);
       else ok(`Design brief ${brief.rel} (project_context says whether it is out of date).`);
+      if (fs.existsSync(brief.file)) {
+        const { rules, errors, blocks } = parseRules(fs.readFileSync(brief.file, "utf8"));
+        for (const e of errors) warn(`${brief.rel}: ${e}`);
+        if (!blocks) warn(`${brief.rel} states no rules in numbers: add a \`\`\`pen-rules block (type sizes, targets, rows, margins, actions, colors) so lint and verify check them.`);
+        else if (!errors.length) ok(`Brief rules checked by lint and verify: ${rulesLine(rules)}`);
+      }
       lines.push(`ℹ️ Other platforms (Flutter, desktop, …): pass source { kind: "file" } or { kind: "command" } writing a snapshot per the resource pen-multi://snapshot-schema; a command runs only after the user trusts it.`);
 
       lines.push("", problems ? `Next: fix the ❌ items (${problems}), then run doctor again.` : "Next: sync_status for where design and code stand, or the port-design / design-from-code prompts.");

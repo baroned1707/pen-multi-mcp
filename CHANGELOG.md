@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.10.0 — 2026-09-30
+
+Brief rules checked by machine (spec: `docs/superpowers/specs/2026-09-30-brief-rules-design.md`).
+
+- **` ```pen-rules ` blocks in the brief**: the guideline's numbers as JSON — type sizes, style count, fonts, minimum target, row heights (for declared row components), side margins per width, spacing scale, prominent actions (declared fills), color roles; `id` is cited by findings and `ignore` takes name globs. Broken blocks are reported by project_context, doctor, lint and verify.
+- **`lint` rule `brief`**: those rules on each screen, grouped with counts and examples. Side margins are measured from the screen's edge or past a sidebar, per pane in split layouts, without shell bars and centered content — on trading-agent this took R5 from noise at tablet and desktop widths to real margins only.
+- **`verify`**: a "## Brief rules" part, outside the verdict, for what the code chose itself (never values it shares with the design); `between` widths list every broken rule.
+- **A whole, current brief**: the digest keeps bold rule labels, lists the checked rules and the brief's references; paths and skills the brief names become sources (a folder is hashed from its files), so a changed guideline skill marks the brief as possibly out of date. `write-brief` / `refresh-brief` ask for the block from numbers the brief states.
+- `inspect` sections: a shell name may end in a number ("TabBar5"), and "Rail" alone is shell.
+
 ## 1.9.0 — 2026-09-30
 
 Responsive widths and interaction states (spec: `docs/superpowers/specs/2026-09-30-states-responsive-design.md`).

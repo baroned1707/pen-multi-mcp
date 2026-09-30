@@ -79,7 +79,7 @@ Many agents and projects:
 - Global variables set in execute live only while a headless file stays open. Idle files close after ${config.idleMs / 60_000} minutes or when editor slots run out; re-read ids with Get instead of relying on old globals. Call close_file when done to free the slot for other agents.
 - Every execute call costs ~0.4 s however small, so put related reads and writes in one snippet instead of many small calls.`;
 
-const server = new McpServer({ name: "pen-multi", version: "1.9.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "pen-multi", version: "1.10.0" }, { instructions: INSTRUCTIONS });
 registerPrompts(server, z);
 server.registerResource("snapshot-schema", "pen-multi://snapshot-schema", { title: "UI snapshot schema v1", description: "What a file or command source must write for verify, import_ui and sync.", mimeType: "application/json" }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(SNAPSHOT_SCHEMA, null, 1) }] }));
 
@@ -618,7 +618,7 @@ tool(
 designTools = registerDesignTools({ tool, z, route, app, pool, saver, timings, ok, fail, fromApp, textOf, optionalFilePath });
 const verifyHooks = {};
 const verifyTools = registerVerifyTools({ tool, z, route, design: designTools, withMachineLock, optionalFilePath, ok, conventions, saver, hooks: verifyHooks });
-registerLintTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath });
+registerLintTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath, conventions });
 const portTools = registerPortTools({ tool, z, route, design: designTools, optionalFilePath, conventions, withMachineLock, saver, stateFor: verifyTools.stateFor });
 verifyHooks.onVerify = portTools.onVerify;
 registerImportTools({ tool, z, route, design: designTools, executeSnippet, optionalFilePath, capture: verifyTools.capture, source: verifyTools.source, conventions, saver });
