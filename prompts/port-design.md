@@ -39,4 +39,5 @@ Watch `port({ action: "status" })` between rounds. When the subagents have retur
 ## 4. Finish
 
 - `port status`: every item `match`, or `blocked` / `skipped` with reasons.
+- For each ported screen: `verify({ target, source: { kind: "web" }, matrix: true, between: true })` — every width and theme at once, and the widths between the designed ones (sideways scrolling, cut or overlapping text). Fix what it finds; report what needs a design decision.
 - `contact_sheet` with the verify reports of the ported screens, and a short summary: what matched, what is blocked and why, what the user must decide.

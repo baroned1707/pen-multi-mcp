@@ -447,14 +447,39 @@ async function addCrossOriginFrames(frame, data, limit, origin, depth = 0) {
   }
 }
 
+/** Steps that put an element into an interaction state; they and the steps after them run last. */
+export const INTERACTION_STEPS = ["hover", "focus", "down"];
+const isInteraction = (step) => INTERACTION_STEPS.some((k) => step[k] !== undefined);
+
+/**
+ * Steps in two parts: before the first interaction step (they load the state: clicks, fills,
+ * waits), and from it on (run after the page is scrolled through and its fonts are loaded, right
+ * before measuring — scrolling or a late layout would otherwise undo a hover).
+ */
+export function splitSteps(steps = []) {
+  const k = steps.findIndex(isInteraction);
+  return k < 0 ? { early: steps, late: [] } : { early: steps.slice(0, k), late: steps.slice(k) };
+}
+
 async function runStep(page, step) {
+  if (step.hover) return page.hover(step.hover, { timeout: 10_000 });
+  if (step.focus) return page.focus(step.focus, { timeout: 10_000 });
+  if (step.down) {
+    // Pressed: the mouse held down over the element (released only when the page closes).
+    const el = page.locator(step.down).first();
+    await el.scrollIntoViewIfNeeded({ timeout: 10_000 });
+    const b = await el.boundingBox();
+    if (!b) throw new Error(`down: ${step.down} is not visible`);
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    return page.mouse.down();
+  }
   if (step.click) return page.click(step.click, { timeout: 10_000 });
   if (step.fill) return page.fill(step.fill[0], String(step.fill[1] ?? ""), { timeout: 10_000 });
   if (step.press) return page.keyboard.press(step.press);
   if (step.wait) return page.waitForTimeout(Number(step.wait));
   if (step.waitFor) return page.waitForSelector(step.waitFor, { timeout: 15_000 });
   if (step.eval) return page.evaluate(step.eval);
-  throw new Error(`Unknown step ${JSON.stringify(step)}; use click, fill, press, wait, waitFor or eval.`);
+  throw new Error(`Unknown step ${JSON.stringify(step)}; use click, fill, press, wait, waitFor, eval, hover, focus or down.`);
 }
 
 export const WEB_FIELDS = ["text", "bg", "fg", "fontSize", "fontWeight", "lineHeight", "radius", "border"];
@@ -504,7 +529,63 @@ async function installMocks(context, mocks, cwd) {
   }
 }
 
-export async function captureWeb({ url, steps = [], mocks = [], fullPage = true, width, height, colorScheme, screenshotPath, limit = 6000 }) {
+/**
+ * Runs in the page: what a layout that does not fit its width shows — the page scrolling sideways
+ * (and the outermost elements past the right edge, outside any clipping or scrolling container),
+ * text cut by a box that hides its overflow, and interactive elements (for their size).
+ */
+function responsiveProbe() {
+  const vw = document.documentElement.clientWidth;
+  const scrollW = Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0);
+  const sx = window.scrollX, sy = window.scrollY;
+  const box = (r) => ({ x: r.left + sx, y: r.top + sy, w: r.width, h: r.height });
+  const label = (el) => {
+    const pen = el.closest("[data-pen]")?.getAttribute("data-pen");
+    const cls = typeof el.className === "string" ? el.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
+    return { tag: el.tagName.toLowerCase(), marker: pen || undefined, selector: `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : cls ? `.${cls}` : ""}`, text: (el.innerText || el.value || el.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim().slice(0, 60) || undefined };
+  };
+  const shown = (el, cs) => cs.display !== "none" && cs.visibility === "visible" && Number(cs.opacity) > 0;
+  // Inside a box that clips or scrolls sideways and itself fits: not the page's overflow.
+  const contained = (el) => {
+    for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+      const ps = getComputedStyle(p);
+      if (ps.overflowX !== "visible" && p.getBoundingClientRect().right <= vw + 1) return true;
+      if (ps.position === "fixed") return false;
+    }
+    return false;
+  };
+  const past = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.right > vw + 1;
+  };
+  const overflow = [];
+  const cut = [];
+  const targets = [];
+  const all = document.body ? document.body.querySelectorAll("*") : [];
+  for (const el of all) {
+    if (overflow.length + cut.length + targets.length > 400) break;
+    const cs = getComputedStyle(el);
+    if (!shown(el, cs)) continue;
+    if (scrollW > vw + 1 && past(el) && !(el.parentElement && el.parentElement !== document.body && past(el.parentElement)) && !contained(el)) {
+      overflow.push({ ...label(el), box: box(el.getBoundingClientRect()), right: Math.round(el.getBoundingClientRect().right) });
+    }
+    const own = [...el.childNodes].some((c) => c.nodeType === 3 && c.textContent.trim());
+    if (own) {
+      const ellipsis = cs.textOverflow === "ellipsis" || (cs.webkitLineClamp && cs.webkitLineClamp !== "none");
+      const x = cs.overflowX !== "visible" && el.scrollWidth > el.clientWidth + 1;
+      const y = cs.overflowY !== "visible" && el.scrollHeight > el.clientHeight + 1;
+      if (x || y) cut.push({ ...label(el), box: box(el.getBoundingClientRect()), how: ellipsis ? "ellipsis" : "hidden" });
+    }
+    const interactive = /^(BUTTON|SELECT|TEXTAREA)$/.test(el.tagName) || (el.tagName === "INPUT" && el.type !== "hidden") || el.getAttribute("role") === "button" || (el.tagName === "A" && el.hasAttribute("href") && cs.display !== "inline");
+    if (interactive) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) targets.push({ ...label(el), box: box(r) });
+    }
+  }
+  return { viewportW: vw, scrollW, overflow: overflow.slice(0, 20), cut: cut.slice(0, 40), targets: targets.slice(0, 200) };
+}
+
+export async function captureWeb({ url, steps = [], mocks = [], fullPage = true, width, height, colorScheme, screenshotPath, limit = 6000, element, probe = false }) {
   if (!/^(https?|file):/i.test(url ?? "")) throw new Error(`source.url must be an http(s) or file URL: ${url}`);
   const browser = await launch();
   try {
@@ -516,7 +597,8 @@ export async function captureWeb({ url, steps = [], mocks = [], fullPage = true,
     const res = await page.goto(url, { waitUntil: "load", timeout: 45_000 });
     if (res && res.status() >= 400) throw new Error(`${url} answered HTTP ${res.status()}`);
     await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
-    for (const step of steps) await runStep(page, step);
+    const { early, late } = splitSteps(steps);
+    for (const step of early) await runStep(page, step);
     // content-visibility:auto sections render only near the viewport; render them all.
     await page.addStyleTag({ content: "*{content-visibility:visible !important}" }).catch(() => {});
     if (fullPage) await revealAll(page);
@@ -531,7 +613,21 @@ export async function captureWeb({ url, steps = [], mocks = [], fullPage = true,
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       })
       .catch(() => {});
-    await page.waitForTimeout(150);
+    for (const step of late) await runStep(page, step);
+    await page.waitForTimeout(late.length ? 250 : 150); // transitions of the state the steps caused
+    let focus = null;
+    if (element) {
+      const loc = page.locator(element).first();
+      if (!(await loc.count())) throw new Error(`source.element ${element} matches nothing on ${url}`);
+      if (!late.length) await loc.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+      focus = await loc.evaluate((el) => {
+        const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+        return { box: { x: r.left + window.scrollX, y: r.top + window.scrollY, w: r.width, h: r.height }, bg: cs.backgroundColor, radius: parseFloat(cs.borderTopLeftRadius) || 0, selector: undefined };
+      });
+      if (!focus.box.w || !focus.box.h) throw new Error(`source.element ${element} is not visible on ${url}`);
+      focus.selector = element;
+    }
+    const responsive = probe ? await page.evaluate(responsiveProbe) : undefined;
     const data = await page.evaluate(collect, limit);
     // The main frame's viewport sits at the page's scroll position (collect() used page coordinates).
     const mainScroll = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
@@ -552,6 +648,8 @@ export async function captureWeb({ url, steps = [], mocks = [], fullPage = true,
         pageBg: data.pageBg,
         pageErrors: errors.length ? errors.slice(0, 5) : undefined,
         elements: data.elements,
+        element: focus ?? undefined,
+        responsive,
       },
     };
   } finally {

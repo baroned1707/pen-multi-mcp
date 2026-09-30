@@ -327,3 +327,100 @@ export function lintVariants(analysis) {
   }
   return out;
 }
+
+// Interaction states a component's variants are named with ("Button — hover", "Button/State=Pressed").
+const STATE_OF = { hover: "hover", hovered: "hover", focus: "focus", focused: "focus", "focus-visible": "focus", pressed: "pressed", press: "pressed", active: "pressed", disabled: "disabled", inactive: "disabled", error: "error", invalid: "error" };
+const STATE_NOISE = new Set(["state", "default", "normal", "rest", "enabled", "variant", "type", "selected", "checked", "filled", "loading"]);
+const INTERACTIVE = /\b(button|btn|input|field|textfield|text ?area|search|tab|chip|switch|toggle|checkbox|radio|select|dropdown|link|nút|ô nhập)\b/i;
+const CONTAINER = /\b(bar|group|list|row|section|container|panel|nav|menu|header|footer)\b/i;
+const INPUT = /\b(input|field|textfield|text ?area|search|ô nhập)\b/i;
+const SCREEN_STATE = { empty: "empty", "rỗng": "empty", "trống": "empty", error: "error", "lỗi": "error", loading: "loading", "đang tải": "loading", offline: "error" };
+
+/** A component name as { base, state }: "Button / Hover" → { base: "button", state: "hover" }. */
+export function componentState(name) {
+  const parts = String(name ?? "")
+    .toLowerCase()
+    .split(/\s*[—–·|/,]\s*|\s+-\s+/)
+    .flatMap((p) => p.split("="))
+    .map((p) => p.trim())
+    .filter(Boolean);
+  let state = null;
+  const base = [];
+  parts.forEach((p, k) => {
+    if (k > 0 && STATE_OF[p]) state ??= STATE_OF[p];
+    else if (!(k > 0 && STATE_NOISE.has(p))) base.push(p);
+  });
+  return { base: base.join(" / "), state };
+}
+
+/** A screen shows repeated content: ≥ 3 siblings that are one component's instances or share a structure. */
+export function hasRepeated(model) {
+  for (const n of model.nodes.values()) {
+    if ((n.children?.length ?? 0) < 3) continue;
+    // Rows of one kind, stacked: a list or a grid (a tab bar's items side by side are not content).
+    const rowsOf = new Map(); // signature -> set of row tops
+    for (const c of n.children) {
+      if (c.hidden) continue;
+      // A row of data holds at least two texts (a nav item's icon and label is not data).
+      const texts = (c.children ?? []).filter((x) => x.type === "text").length;
+      const sig = c.component ? `ref:${c.component.id}` : texts >= 2 ? `${c.type}:${c.children.map((x) => x.type).join(",")}` : null;
+      if (sig) rowsOf.set(sig, (rowsOf.get(sig) ?? new Set()).add(Math.round(c.abs?.y ?? 0)));
+    }
+    if ([...rowsOf.values()].some((ys) => ys.size >= 3)) return true;
+  }
+  return false;
+}
+
+/**
+ * States the design does not draw, so developers would guess them: interactive components without
+ * their hover/focus/pressed/disabled variants, and screens with repeated content (lists, feeds)
+ * without empty, error and loading frames. `repeated`: screen frame id → hasRepeated.
+ */
+export function lintStates(analysis, { repeated = new Map() } = {}) {
+  const out = [];
+  const rows = analysis.matrix?.rows ?? [];
+  const wide = rows.some((r) => Object.keys(r.cells).some((w) => Number(w) >= 768));
+  const groups = new Map(); // base -> { comp, states }
+  for (const c of analysis.components ?? []) {
+    const { base, state } = componentState(c.name);
+    const g = groups.get(base) ?? { comp: null, states: new Set() };
+    if (state) g.states.add(state);
+    else g.comp ??= c;
+    groups.set(base, g);
+  }
+  for (const [base, g] of groups) {
+    if (!g.comp || !INTERACTIVE.test(base) || CONTAINER.test(base)) continue;
+    const expected = INPUT.test(base) ? ["focus", "disabled", "error"] : wide ? ["hover", "focus", "disabled"] : ["pressed", "disabled"];
+    const missing = expected.filter((s) => !g.states.has(s));
+    if (missing.length) {
+      out.push({ rule: "states", severity: "low", id: g.comp.id, address: g.comp.name, message: `interactive component without its ${missing.join(", ")} state${missing.length > 1 ? "s" : ""}${g.states.size ? ` (has ${[...g.states].join(", ")})` : ""}: draw them as components named "${g.comp.name} — ${missing[0]}" so code does not guess.` });
+    }
+  }
+  const byScreen = new Map();
+  for (const r of rows) {
+    const e = byScreen.get(r.screen) ?? { base: null, states: new Set() };
+    if (r.state) for (const s of String(r.state).toLowerCase().split(/\s*·\s*/)) SCREEN_STATE[s] && e.states.add(SCREEN_STATE[s]);
+    else e.base ??= r;
+    byScreen.set(r.screen, e);
+  }
+  const drawn = new Set([...byScreen.values()].flatMap((e) => [...e.states]));
+  const lists = [...byScreen].filter(([, e]) => e.base && Object.values(e.base.cells).flat().some((c) => repeated.get(c.id)));
+  const idOf = (e) => Object.values(e.base.cells).flat()[0]?.id;
+  // A state no screen draws is one decision for the whole design; a state some lists draw and
+  // others do not is a gap in those screens.
+  const nowhere = ["empty", "error", "loading"].filter((s) => !drawn.has(s));
+  if (nowhere.length && lists.length) {
+    const names = lists.map(([screen]) => screen);
+    const when = { empty: "with no data", error: "when loading fails", loading: "while data loads" };
+    out.push({ rule: "states", severity: "low", id: idOf(lists[0][1]), address: "document", message: `no screen draws the ${nowhere.length > 1 ? `${nowhere.slice(0, -1).join(", ")} or ${nowhere.at(-1)}` : nowhere[0]} state, and ${names.length} screen${names.length > 1 ? "s show" : " shows"} repeated content (${names.slice(0, 6).join(", ")}${names.length > 6 ? ", …" : ""}): decide how they look ${nowhere.map((x) => when[x]).join(", ")}, and draw it once.` });
+  }
+  const gaps = lists.map(([screen, e]) => ({ screen, e, missing: ["empty", "error", "loading"].filter((s) => drawn.has(s) && !e.states.has(s)) })).filter((g) => g.missing.length);
+  if (gaps.length > 5) {
+    // Many screens: one finding, not a page of them.
+    const states = [...new Set(gaps.flatMap((g) => g.missing))];
+    out.push({ rule: "states", severity: "low", id: idOf(gaps[0].e), address: `${gaps.length} screens`, message: `${gaps.length} screens show repeated content without the ${states.join(", ")} frame${states.length > 1 ? "s" : ""} other screens have: ${gaps.slice(0, 8).map((g) => g.screen).join(", ")}${gaps.length > 8 ? ", …" : ""}.` });
+  } else {
+    for (const g of gaps) out.push({ rule: "states", severity: "low", id: idOf(g.e), address: g.screen, message: `shows repeated content but has no ${g.missing.join(", ")} frame${g.missing.length > 1 ? "s" : ""} (e.g. "${g.screen} — ${g.missing[0]}"), which other screens have.` });
+  }
+  return out;
+}

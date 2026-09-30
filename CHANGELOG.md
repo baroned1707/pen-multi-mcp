@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.9.0 — 2026-09-30
+
+Responsive widths and interaction states (spec: `docs/superpowers/specs/2026-09-30-states-responsive-design.md`).
+
+- **`verify` `matrix: true`**: every frame of the screen (each width × theme) in one call — a table of verdicts, then the full report of the worst frame.
+- **`verify` `between: true`** (web): the page at the midpoint of each pair of neighbouring design widths, checked without a design — sideways scrolling (naming the elements past the edge), text cut or shortened, overlapping text, touch targets under 24×24 below 1024 px, and texts of the nearest design frame gone.
+- **Interaction states**: web steps `hover`, `focus` and `down` (pressed) run right before the capture, after scrolling and fonts. `source.element` verifies one element against a component or a component state frame; its fill and corner radius are compared exactly (a hover one shade darker, ΔE ≈ 9, counts), and "Button — hover" / "Button/State=Pressed" frames get their step automatically.
+- **`lint` rule `states`**: interactive components without hover / focus / disabled (pressed / disabled on phone-only documents; inputs also error), and screens with repeated content without empty, error and loading frames.
+
 ## 1.8.0 — 2026-09-30
 
 Project context that stays current (spec: `docs/superpowers/specs/2026-09-30-project-context-design.md`).

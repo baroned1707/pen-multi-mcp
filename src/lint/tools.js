@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildModel } from "../design/model.js";
 import { ReadError, readSubtree } from "../design/read.js";
-import { lintScreen, lintVariants, RULES } from "./rules.js";
+import { hasRepeated, lintScreen, lintStates, lintVariants, RULES } from "./rules.js";
 import { diffTokens, normalizeTokens, renderTokens } from "./tokens.js";
 import { readPng, sampleColors } from "../verify/image.js";
 import os from "node:os";
@@ -14,11 +14,11 @@ const FIXABLE = { names: "default-name", tokens: "raw-color" };
 export function registerLintTools({ tool, z, route, design, executeSnippet, optionalFilePath }) {
   tool(
     "lint",
-    `Use before porting a screen, or after editing the design: problems in the design that would become bugs in code, with safe fixes. Check a .pen design for what makes it hard to implement faithfully or to use: raw colors where a token exists, text contrast below WCAG AA, touch targets under 44×44 on phone screens, default layer names ("Frame 12"), off-scale font sizes and spacing, hidden or clipped leftovers, near-misaligned and unevenly spaced siblings in free layouts, engine-reported layout problems, and screens missing a theme most screens have. Without target it checks the document's screens (up to maxScreens). fix: ["names", "tokens"] applies the unambiguous fixes (rename default-named layers after their text or component; replace a raw color with the one token that has exactly that value) and reports what it changed.`,
+    `Use before porting a screen, or after editing the design: problems in the design that would become bugs in code, with safe fixes. Check a .pen design for what makes it hard to implement faithfully or to use: raw colors where a token exists, text contrast below WCAG AA, touch targets under 44×44 on phone screens, default layer names ("Frame 12"), off-scale font sizes and spacing, hidden or clipped leftovers, near-misaligned and unevenly spaced siblings in free layouts, engine-reported layout problems, screens missing a theme most screens have, and states the design does not draw (interactive components without hover/focus/pressed/disabled variants; list screens without empty, error and loading frames). Without target it checks the document's screens (up to maxScreens). fix: ["names", "tokens"] applies the unambiguous fixes (rename default-named layers after their text or component; replace a raw color with the one token that has exactly that value) and reports what it changed.`,
     {
       filePath: optionalFilePath,
       target: z.string().optional().describe("One screen (name, code or node id). Omit for the whole document."),
-      rules: z.array(z.enum([...RULES, "variants"])).optional().describe("Only these rules."),
+      rules: z.array(z.enum([...RULES, "variants", "states"])).optional().describe("Only these rules."),
       fix: z.array(z.enum(["names", "tokens"])).optional().describe("Apply these safe fixes."),
       maxScreens: z.number().int().min(1).max(200).optional().describe("Screens checked without target (default 12)."),
       maxLines: z.number().int().min(10).max(2000).optional().describe("Findings listed (default 150)."),
@@ -35,12 +35,14 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
       const findings = [];
       const names = new Map();
       const components = new Map(); // component id -> name, as used by the checked screens
+      const repeated = new Map(); // screen frame id -> shows repeated content
       const renderDir = fs.mkdtempSync(path.join(os.tmpdir(), "pen-multi-lint-"));
       try {
         for (const id of ids) {
           await design.settleFonts?.(target, id);
           const model = buildModel(await readSubtree(run, id));
           names.set(id, model.root.name ?? id);
+          repeated.set(id, hasRepeated(model));
           for (const n of model.nodes.values()) if (n.component && !n.component.swapped) components.set(n.component.id, n.component.name);
           // Texts over images or gradients need the render to measure what is behind them: lint once
           // without it, and only if such a text exists, render the screen and lint again with sampling.
@@ -68,7 +70,7 @@ export function registerLintTools({ tool, z, route, design, executeSnippet, opti
           // a component in another file or unreadable: skip
         }
       }
-      if (!wanted) findings.push(...lintVariants(analysis).map((x) => ({ ...x, screen: x.address })));
+      if (!wanted) findings.push(...[...lintVariants(analysis), ...lintStates(analysis, { repeated })].map((x) => ({ ...x, screen: x.address })));
       const shown = findings.filter((x) => !rules || rules.includes(x.rule)).sort((a, b) => SEVERITY[a.severity] - SEVERITY[b.severity] || a.rule.localeCompare(b.rule));
 
       // Fixes: one Update per node, applied in batches.

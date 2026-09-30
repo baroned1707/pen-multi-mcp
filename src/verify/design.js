@@ -99,7 +99,15 @@ export function designNodes(model) {
   walk(model.root, false, []);
   return {
     nodes: out,
-    frame: { id: model.root.id, name: model.root.name, w: model.root.abs.w, h: model.root.abs.h },
+    frame: {
+      id: model.root.id,
+      name: model.root.name,
+      w: model.root.abs.w,
+      h: model.root.abs.h,
+      // The frame's own look: compared when the UI is one element (a component).
+      fill: colorOf(model.root.fill, model.root.resolved?.fill),
+      radius: numberOf(Array.isArray(model.root.resolved?.cornerRadius ?? model.root.cornerRadius) ? (model.root.resolved?.cornerRadius ?? model.root.cornerRadius)[0] : (model.root.resolved?.cornerRadius ?? model.root.cornerRadius)),
+    },
     deviceChrome: chrome,
     order: sec.sections.filter((s) => !s.fixed).map((s) => s.node.id),
     allNames: new Set([...model.nodes.values()].map((n) => n.name).filter(Boolean)),

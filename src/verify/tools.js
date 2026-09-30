@@ -16,6 +16,10 @@ import { contactSheet, findingCrops, renderReport, sheetRow } from "./report.js"
 import { pointFindingsAtCode } from "./code.js";
 import { USAGE_SNIPPET, designEdits, editLines, propertyNumbers } from "./reverse.js";
 import { layoutEdits } from "./layout.js";
+import { cropImage, cropSnapshot, stateStep } from "./element.js";
+import { betweenFindings, betweenWidths, nearestWidth } from "./responsive.js";
+import { normText } from "./match.js";
+import { INTERACTION_STEPS } from "./adapters/web.js";
 import { nextStep } from "../guide.js";
 import { annotate } from "../calllog.js";
 import { buildRecord, diffText, factsDiff, frameDiff, readRecord, recordPath, syncState, writeRecord } from "../sync/index.js";
@@ -110,7 +114,8 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
     .object({
       kind: z.enum(["web", "probe", "native", "image", "file", "command"]).describe("web: a URL in headless Chromium; probe: a React Native/Expo dev build running <PenProbe>; native: any Android/iOS app via uiautomator/maestro; image: a screenshot file; file: a snapshot JSON written by any tool (schema: resource pen-multi://snapshot-schema); command: a trusted project command that writes one (any platform: Flutter, desktop, …)."),
       url: z.string().optional().describe("web: the page to load (the agent starts the dev server). verify can omit it when .pen-multi.json maps the screen to a route."),
-      steps: z.array(z.record(z.string(), z.any())).optional().describe('web: actions before capturing, e.g. [{ "click": "text=Login" }, { "fill": ["#email", "a@b.c"] }, { "waitFor": ".list" }, { "wait": 500 }, { "press": "Enter" }, { "eval": "..." }].'),
+      steps: z.array(z.record(z.string(), z.any())).optional().describe('web: actions before capturing, e.g. [{ "click": "text=Login" }, { "fill": ["#email", "a@b.c"] }, { "waitFor": ".list" }, { "wait": 500 }, { "press": "Enter" }, { "eval": "..." }]. Interaction states: { "hover": sel }, { "focus": sel }, { "down": sel } (mouse held: pressed) run last, right before the capture.'),
+      element: z.string().optional().describe('web: verify one element (a component) instead of the page — a CSS selector, e.g. [data-pen="Button"]. The target is then the component or its state frame ("Button — hover"); a state frame\'s hover/focus/pressed step is added for the element when steps have none.'),
       fullPage: z.boolean().optional().describe("web: capture the whole scrolling page (default true)."),
       mocks: z
         .array(
@@ -135,7 +140,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       path: z.string().optional().describe("image: PNG screenshot path; file: snapshot JSON path."),
       run: z.string().optional().describe('command: the shell command. It gets PEN_SNAPSHOT_OUT, PEN_SCREENSHOT_OUT, PEN_WIDTH, PEN_HEIGHT, PEN_THEME, PEN_TARGET, PEN_STATE and writes the snapshot there. Runs only if the user trusted it for this project (the error says how).'),
       cwd: z.string().optional().describe("command: folder to run it in (default: the working directory)."),
-      width: z.number().positive().optional().describe("image: the screenshot's logical width (e.g. 390 for a 1170 px iPhone shot)."),
+      width: z.number().positive().optional().describe("image: the screenshot's logical width (e.g. 390 for a 1170 px iPhone shot); web with element: the viewport width (default 1280)."),
     })
     .describe("Where the implemented UI comes from.");
 
@@ -156,7 +161,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
     }
   };
 
-  async function capture(src, { width, height, colorScheme, name, savePath }) {
+  async function capture(src, { width, height, colorScheme, name, savePath, probe = false }) {
     const base = savePath ? path.resolve(process.cwd(), savePath).replace(/\.(json|png)$/i, "") : path.join(process.cwd(), OUT_DIR, "captures", name);
     // At a path the caller chose, only a previous capture may be replaced, never an unrelated JSON
     // or image. design-verify/captures/ belongs to this tool (a failed capture may leave a lone PNG).
@@ -171,7 +176,7 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
     let snapshot;
     if (src.kind === "web") {
       if (!src.url) throw new ReadError("source.url is required for kind web");
-      ({ snapshot } = await captureWeb({ url: src.url, steps: src.steps, mocks: src.mocks ?? [], fullPage: src.fullPage !== false, width, height, colorScheme, screenshotPath }));
+      ({ snapshot } = await captureWeb({ url: src.url, steps: src.steps, mocks: src.mocks ?? [], fullPage: src.fullPage !== false, width, height, colorScheme, screenshotPath, element: src.element, probe }));
     } else if (src.kind === "probe") {
       ({ snapshot } = await withMachineLock("pen-probe", () => captureProbe({ ...src, screenshotPath })));
     } else if (src.kind === "native") {
@@ -276,9 +281,28 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       maxLines: z.number().int().min(10).max(2000).optional().describe("Findings listed inline (default 120); the JSON has all."),
       direction: z.enum(["design-to-code", "code-to-design"]).optional().describe('"design-to-code" (default): the code should follow the design. "code-to-design": the design should follow the code — each finding with a clear cause gets a proposed execute operation (not applied).'),
       crops: z.number().int().min(0).max(10).optional().describe("Close-ups (design | app) of the worst findings attached as images (default 3; 0 for none)."),
+      matrix: z.boolean().optional().describe("Verify every frame of the screen (each width × theme) in one call: a table of verdicts, then the full report of the worst frame."),
+      between: z.boolean().optional().describe("web: also load the page at the midpoint of each pair of neighbouring design widths (390/834 → 612) and check what needs no design: sideways scrolling, cut or overlapping text, tiny touch targets, texts of the nearest design frame gone."),
     },
-    async ({ filePath: f, target: wanted, width, theme, source: src, snapshot: snapPath, tolerance, maxLines = 120, crops = 3, direction = "design-to-code" }) => {
+    async (args) => {
+      if (args.matrix && args.source?.element) throw new ReadError("matrix verifies screens; verify one element without matrix.");
+      const target = await route(args.filePath);
+      let { lines, images } = args.matrix ? await verifyMatrix(args) : await verifyOne(args);
+      if (args.between) {
+        // Before the closing Next line, which stays last.
+        const next = /^Next/.test(lines.at(-1) ?? "") ? lines.slice(-1) : [];
+        lines = [...lines.slice(0, lines.length - next.length), "", ...(await betweenReport(args)), ...(next.length ? ["", ...next] : [])];
+      }
+      const res = design.wrap(target, lines);
+      res.content.push(...images);
+      return res;
+    },
+  );
+
+  /** One frame against the UI: the verify report, and what the matrix table needs. */
+  async function verifyOne({ filePath: f, target: wanted, width, theme, source: src, snapshot: snapPath, tolerance, maxLines = 120, crops = 3, direction = "design-to-code" }) {
       if (!src && !snapPath) throw new ReadError("Pass source (to capture now) or snapshot (a capture file).");
+      if (src?.element && src.kind !== "web") throw new ReadError("source.element works with web sources.");
 
       const target = await route(f);
       const run = design.reader(target);
@@ -287,6 +311,9 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       if (src?.kind === "web" && !src.url) src = { ...src, url: routeUrl(target, wanted, picked) };
       await design.settleFonts(target, id); // the design measured in its real fonts
       const model = buildModel(await readSubtree(run, id));
+      // A state frame ("Button — hover") verified on one element: its state, unless the steps set one.
+      const wantedState = src?.element ? stateStep(model.root.name) : null;
+      if (wantedState && !(src.steps ?? []).some((st) => INTERACTION_STEPS.some((k) => st[k] !== undefined))) src = { ...src, steps: [...(src.steps ?? []), { [wantedState]: src.element }] };
       const rootTheme = model.root.theme && typeof model.root.theme === "object" ? Object.values(model.root.theme)[0] : undefined;
       const d = designNodes(model);
       // The .pen's hash keeps forks of the same screen (verified by two agents at once) apart.
@@ -304,8 +331,19 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
         if (!isSnapshotFile(snapshotPath)) throw new ReadError(`${snapshotPath} is not a capture snapshot (written by capture or verify).`);
         snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
       } else {
-        const viewportH = Math.min(d.frame.h, 1080);
-        ({ snapshot, snapshotPath } = await capture(src, { width: d.frame.w, height: viewportH, colorScheme: colorSchemeOf(frameTheme ?? rootTheme), name }));
+        const viewportH = src.element ? 900 : Math.min(d.frame.h, 1080);
+        ({ snapshot, snapshotPath } = await capture(src, { width: src.element ? src.width ?? 1280 : d.frame.w, height: viewportH, colorScheme: colorSchemeOf(frameTheme ?? rootTheme), name }));
+        if (snapshot.element) {
+          // The element as the snapshot: its elements, and its part of the screenshot.
+          const full = snapshot;
+          snapshot = cropSnapshot(full);
+          if (full.screenshot && fs.existsSync(full.screenshot)) {
+            const png = full.screenshot.replace(/\.png$/i, "-element.png");
+            writePng(png, cropImage(readPng(full.screenshot), full));
+            snapshot.screenshot = png;
+          }
+          fs.writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 1));
+        }
       }
       const designImg = readPng(designPng);
       const uiImg = snapshot.screenshot && fs.existsSync(snapshot.screenshot) ? readPng(snapshot.screenshot) : null;
@@ -409,15 +447,90 @@ export function registerVerifyTools({ tool, z, route, design, withMachineLock, o
       annotate({ verify: { verdict: result.summary.verdict, high: result.summary.high, medium: result.summary.medium, direction, frame: id, sync: sync?.state ?? (sync?.recorded ? "recorded" : undefined), kinds: [...new Set(result.findings.filter((x) => x.severity !== "low").map((x) => x.kind))] } });
       const syncNext = sync?.state && direction !== "code-to-design" && ["design-changed", "code-changed", "both-changed", "diverged"].includes(sync.state) ? sync.state : null;
       reportLines.push("", nextStep({ state: syncNext ?? (result.summary.verdict === "match" ? "match" : "differs"), id, direction, others }));
-      const res = design.wrap(target, reportLines);
+      const images = [];
       if (uiImg && crops > 0) {
         for (const { finding, image } of findingCrops({ designImg, uiImg, frame: d.frame, findings: result.findings, uiWidth: snapshot.viewport?.w, n: crops })) {
-          res.content.push({ type: "text", text: `Finding ${finding.n} [${finding.severity}] close-up — left: design, right: app.` }, { type: "image", data: pngBuffer(image).toString("base64"), mimeType: "image/png" });
+          images.push({ type: "text", text: `Finding ${finding.n} [${finding.severity}] close-up — left: design, right: app.` }, { type: "image", data: pngBuffer(image).toString("base64"), mimeType: "image/png" });
         }
       }
-      return res;
-    },
-  );
+      const worst = result.findings.find((x) => x.severity !== "low");
+      return { lines: reportLines, images, info: { id, name: model.root.name ?? id, width: d.frame.w, theme: frameTheme ?? rootTheme ?? null, summary: result.summary, worst: worst ? `[${worst.severity}] ${worst.message}` : null, sync: sync?.state ?? (sync?.recorded ? "recorded" : null) } };
+  }
+
+  /** Every frame of the target's screen row, one verify each: a table, then the worst frame's report. */
+  async function verifyMatrix(args) {
+    const target = await route(args.filePath);
+    const { frame } = await pickFrame(target, args.target, {});
+    if (!frame?.row) throw new ReadError(`${args.target} is not a screen frame; matrix needs a screen (name, code or frame id).`);
+    const cells = Object.entries(frame.row.cells).flatMap(([w, cs]) => cs.map((c) => ({ ...c, width: Number(w) || w })));
+    const runs = [];
+    for (const c of cells) {
+      try {
+        runs.push({ c, ...(await verifyOne({ ...args, target: c.id, width: undefined, theme: undefined, crops: 0 })) });
+      } catch (err) {
+        runs.push({ c, error: err.message.split("\n")[0] });
+      }
+    }
+    const rank = (r) => (r.error ? [2, 0, 0] : [r.info.summary.verdict === "match" ? 0 : 1, r.info.summary.high, r.info.summary.medium]);
+    const worst = [...runs].sort((a, b) => {
+      const x = rank(a), y = rank(b);
+      return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
+    })[0];
+    const L = [`# verify matrix: ${frame.row.screen}${frame.row.state ? ` — ${frame.row.state}` : ""} (${runs.length} frames)`, "", "| frame | width | theme | verdict | worst finding |", "|---|---|---|---|---|"];
+    for (const r of runs) {
+      const v = r.error ? `ERROR: ${r.error.slice(0, 80)}` : r.info.summary.verdict === "match" ? "MATCH" : `DIFFERS (${r.info.summary.high} high, ${r.info.summary.medium} medium)`;
+      L.push(`| ${r.c.name} (${r.c.id}) | ${r.c.width} | ${r.c.theme ?? ""} | ${v} | ${r.info?.worst ? r.info.worst.replace(/\|/g, "/").slice(0, 110) : ""} |`);
+    }
+    const matched = runs.filter((r) => r.info?.summary.verdict === "match").length;
+    L.push("", `${matched} of ${runs.length} frames MATCH.${worst.info && worst.info.summary.verdict !== "match" ? ` The worst, ${worst.c.name} (${worst.c.width}${worst.c.theme ? `, ${worst.c.theme}` : ""}), in full below; verify it alone for close-ups.` : ""}`);
+    const differs = worst.info && worst.info.summary.verdict !== "match";
+    return { lines: differs ? [...L, "", "---", "", ...worst.lines] : L, images: [] };
+  }
+
+  /** The between-widths checks for the target's screen (web sources). */
+  async function betweenReport(args) {
+    const L = ["## Between the design widths"];
+    const src0 = args.source;
+    if (!src0 || src0.kind !== "web" || src0.element) {
+      L.push("Skipped: between needs a web page source (other sources cannot load the page at any width).");
+      return L;
+    }
+    const target = await route(args.filePath);
+    const { frame, theme } = await pickFrame(target, args.target, { width: args.width, theme: args.theme });
+    if (!frame?.row) {
+      L.push(`Skipped: ${args.target} is not a screen frame.`);
+      return L;
+    }
+    const cells = Object.entries(frame.row.cells).flatMap(([w, cs]) => cs.map((c) => ({ ...c, width: Number(w) })));
+    const mids = betweenWidths(cells.map((c) => c.width));
+    if (!mids.length) {
+      L.push(`Skipped: ${frame.row.screen} is drawn at one width only.`);
+      return L;
+    }
+    let src = withState(target, args.target, frame, src0);
+    if (!src.url) src = { ...src, url: routeUrl(target, args.target, frame) };
+    const run = design.reader(target);
+    let problems = 0;
+    for (const m of mids) {
+      const near = nearestWidth(cells.map((c) => c.width), m.width);
+      const cell = cells.find((c) => c.width === near && (c.theme ?? null) === (theme ?? null)) ?? cells.find((c) => c.width === near);
+      // Texts the design draws at the nearest width and the page shows there: gone at the midpoint,
+      // a breakpoint hid them (a text the page lacks at the design width too is a port finding, not this).
+      const drawn = designNodes(buildModel(await readSubtree(run, cell.id))).nodes.filter((n) => n.kind === "text").map((n) => n.text);
+      const tag = `${frame.row.screen}-between${theme ? `-${theme}` : ""}`;
+      const atNear = (await capture(src, { width: near, height: 900, colorScheme: colorSchemeOf(theme), name: slug(`${tag}-${near}`) })).snapshot;
+      const shownNear = new Set((atNear.elements ?? []).filter((e) => e.text).map((e) => normText(e.text)));
+      const texts = drawn.filter((t) => shownNear.has(normText(t)));
+      const { snapshot, snapshotPath } = await capture(src, { width: m.width, height: 900, colorScheme: colorSchemeOf(theme), name: slug(`${tag}-${m.width}`), probe: true });
+      const found = betweenFindings(snapshot, { nearest: { name: cell.name, width: near, texts } });
+      problems += found.filter((x) => x.severity !== "low").length;
+      L.push("", `### ${m.width} (between ${m.below} and ${m.above}; nearest design ${cell.name}) — ${found.filter((x) => x.severity !== "low").length ? "PROBLEMS" : "OK"}`);
+      for (const x of found) L.push(`- [${x.severity}] ${x.kind}: ${x.message}`);
+      L.push(`Snapshot: ${path.relative(process.cwd(), snapshotPath)}`);
+    }
+    L.splice(1, 0, `${mids.length} width(s) checked: ${problems ? `${problems} problem(s)` : "no problems"}.`);
+    return L;
+  }
 
   tool(
     "contact_sheet",
