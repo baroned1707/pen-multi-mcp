@@ -24,7 +24,9 @@ any .pen):
      cut by ellipsis or line clamp;
    - overlapping text: two text boxes that cover each other (not overlays: fixed, sticky, absolute);
    - touch targets under 24×24 (WCAG 2.5.8) below 1024 px (touch devices), for buttons, links outside text, inputs;
-   - structure: the texts of the nearest design frame that the page no longer shows.
+   - structure: texts of the nearest design frame that the page shows at that design width but
+     hides at the midpoint (a text missing at the design width too is a port finding, not a
+     breakpoint; measured on trading-agent, comparing with the design alone was all noise).
    Findings are listed per width; the verdict of the between checks is OK or PROBLEMS.
    Other source kinds: skipped with a note (they cannot capture at an arbitrary width).
 
@@ -49,9 +51,12 @@ any .pen):
    radio, select, dropdown, link, …) grouped with their state variants by name. Missing expected
    states → one low finding per component. Expected: hover, focus, disabled when the document has
    a frame ≥ 768 px wide; pressed, disabled otherwise; inputs also expect error.
-2. Screens that show repeated content (≥ 3 siblings that are instances of the same component or
-   share one structure) without empty, error or loading state frames → one low finding per screen,
-   listing the missing states. Only the screens lint checked.
+2. Screens that show repeated content (≥ 3 stacked siblings that are instances of one component,
+   or share one structure holding ≥ 2 texts) without empty, error or loading frames. A state no
+   screen draws is one document finding (one design decision); a state some screens draw and
+   others lack is a finding per screen, collapsed into one when more than five screens lack it.
+   Only the screens lint checked. On trading-agent: 4 findings for 60 screens (23 before
+   collapsing).
 
 ## Out of scope
 
